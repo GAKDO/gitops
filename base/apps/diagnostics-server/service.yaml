@@ -1,0 +1,15 @@
+# 같은 네임스페이스 안에서는 http://diagnostics-server:8080 으로 부른다
+apiVersion: v1
+kind: Service
+metadata:
+  name: diagnostics-server
+  labels:
+    app.kubernetes.io/name: diagnostics-server
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: diagnostics-server
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

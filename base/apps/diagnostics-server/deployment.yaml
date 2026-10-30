@@ -1,0 +1,96 @@
+# diagnostics-server: 진단 검증·전후 비교·점검 플래그 (추이는 InfluxDB에도 쓴다)
+# 이미지 이름은 앱 이름 그대로 둔다. 실제 주소와 태그는 overlays/school의 images:가 넣는다(앱 레포가 kustomize edit set image로 바꿈).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: diagnostics-server
+  labels:
+    app.kubernetes.io/name: diagnostics-server
+spec:
+  replicas: 1
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: diagnostics-server
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0   # 새 파드가 준비된 뒤에만 옛 파드를 내린다
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: diagnostics-server
+    spec:
+      # GHCR 패키지가 비공개일 때만 만드는 Secret (README "처음 한 번"). 없으면 경고만 남기고 공개 이미지로 받는다
+      imagePullSecrets:
+        - name: ghcr-pull
+      automountServiceAccountToken: false
+      # 같은 네임스페이스 Service마다 붙는 *_PORT=tcp://... 환경 변수를 끈다. infra.env 값과 이름이 겹치지 않게 한다
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 40
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: diagnostics-server
+          image: diagnostics-server
+          ports:
+            - name: http
+              containerPort: 8080
+          # 학교 공유 인프라 주소는 trace-infra(overlays/school/infra.env), 비밀번호·키는 Rancher에서 손으로 만든 trace-secrets에서 읽는다
+          envFrom:
+            - configMapRef:
+                name: trace-infra
+            - secretRef:
+                name: trace-secrets
+                optional: true   # Secret이 없어도 파드는 만들어진다. 값이 없으면 앱이 시작하다 멈추니 README 순서대로 먼저 만든다
+          env:
+            - name: SPRING_PROFILES_ACTIVE
+              value: school
+            - name: JAVA_TOOL_OPTIONS
+              value: "-XX:MaxRAMPercentage=75 -XX:+ExitOnOutOfMemoryError -Djava.io.tmpdir=/tmp"
+            - name: SERVER_SHUTDOWN
+              value: graceful
+          resources:
+            requests:
+              cpu: 100m
+              memory: 384Mi
+            limits:
+              cpu: 500m
+              memory: 768Mi
+          # Spring Boot는 쿠버네티스 안에서 liveness·readiness 경로를 자동으로 연다
+          startupProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            periodSeconds: 5
+            failureThreshold: 60   # CPU 한도가 작고 Flyway 마이그레이션도 돌아서 최대 5분 기다린다
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: http
+            periodSeconds: 5
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi

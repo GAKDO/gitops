@@ -1,0 +1,117 @@
+# label-studio: 학습 데이터 라벨링. 가져다 쓰는 공식 이미지라 코드 레포가 없고, 버전은 여기서 직접 올린다.
+# 밖으로는 overlays/school이 NodePort 8316으로 연다.
+# 프로젝트·라벨 상태는 클러스터 안 PostgreSQL의 labelstudio DB에, 업로드·내보내기 파일은 PVC(/label-studio/data)에 둔다.
+# 사진 원본(trace-raw)과 라벨 결과(trace-labels)는 Label Studio 화면의 Cloud Storage로 학교 MinIO 버킷을 붙인다
+# ("Use pre-signed URLs"를 끄면 Label Studio가 이미지를 대신 전달해 CORS 문제가 없다).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: label-studio-data
+  labels:
+    app.kubernetes.io/name: label-studio
+  annotations:
+    # 매니페스트에서 빠져도 Argo CD가 이 볼륨을 지우지 않게 한다 (라벨링 파일 보호)
+    argocd.argoproj.io/sync-options: Prune=false
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: label-studio
+  labels:
+    app.kubernetes.io/name: label-studio
+spec:
+  replicas: 1
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: label-studio
+  # 한 노드에만 붙는 볼륨(RWO)이라 옛 파드를 내린 뒤 새 파드를 띄운다
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: label-studio
+    spec:
+      automountServiceAccountToken: false
+      # Service 이름이 label-studio라 켜 두면 LABEL_STUDIO_PORT=tcp://... 가 붙는데, Label Studio가 이 값을 자기 포트 설정으로 읽어 시작하지 못한다
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        # 이미지 기본 사용자. fsGroup으로 PVC에 쓸 수 있게 한다
+        runAsUser: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: label-studio
+          image: heartexlabs/label-studio:1.19.0
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: DJANGO_DB
+              value: default
+            - name: POSTGRE_HOST
+              value: postgres
+            - name: POSTGRE_PORT
+              value: "5432"
+            - name: POSTGRE_NAME
+              value: labelstudio
+            # 계정은 postgres가 처음 뜰 때 trace-postgres의 같은 값으로 만든다 (base/postgres/init-db.sh)
+            - name: POSTGRE_USER
+              valueFrom:
+                secretKeyRef:
+                  name: trace-postgres
+                  key: POSTGRE_USER
+            - name: POSTGRE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: trace-postgres
+                  key: POSTGRE_PASSWORD
+            - name: LABEL_STUDIO_BASE_DATA_DIR
+              value: /label-studio/data
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          # 처음 뜰 때 DB 마이그레이션이 돌아서 최대 5분 기다린다
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /label-studio/data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: label-studio-data

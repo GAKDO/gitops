@@ -1,0 +1,75 @@
+# web: 리포트·3D 트윈·폰 촬영 웹앱·관리 화면 (React + three.js 빌드 결과를 nginx-unprivileged가 8080에서 내려준다).
+# 밖으로는 overlays/school이 NodePort 8315로 연다.
+# 이미지 이름은 앱 이름 그대로 둔다. 실제 주소와 태그는 overlays/school의 images:가 넣는다(앱 레포가 kustomize edit set image로 바꿈).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  labels:
+    app.kubernetes.io/name: web
+spec:
+  replicas: 1
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: web
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0   # 새 파드가 준비된 뒤에만 옛 파드를 내린다
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: web
+    spec:
+      # GHCR 패키지가 비공개일 때만 만드는 Secret (README "처음 한 번"). 없으면 경고만 남기고 공개 이미지로 받는다
+      imagePullSecrets:
+        - name: ghcr-pull
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        # nginx-unprivileged 이미지의 nginx 사용자
+        runAsUser: 101
+        runAsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: web
+          image: web
+          ports:
+            - name: http
+              containerPort: 8080
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 5
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          # nginx-unprivileged는 pid 파일과 임시 파일을 /tmp에만 쓴다
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi

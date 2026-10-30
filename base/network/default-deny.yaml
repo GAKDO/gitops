@@ -1,0 +1,21 @@
+# 네임스페이스 기본 차단. 여러 팀이 같이 쓰는 학교 클러스터라, 다른 네임스페이스나 바깥에서 들어오는 연결을 모두 막고 필요한 것만 연다.
+# 나가는 연결(Egress)은 막지 않는다. 앱이 학교 MinIO·RabbitMQ·Redis·InfluxDB·Elasticsearch와 Gmail SMTP에 붙어야 한다.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress"]
+---
+# 같은 네임스페이스 파드끼리는 서로 부를 수 있다 (gateway → 서버 5개, 서버끼리, 앱·Label Studio·백업 → postgres)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-same-namespace
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector: {}

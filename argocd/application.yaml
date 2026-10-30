@@ -1,0 +1,27 @@
+# Argo CD Application 하나가 이 레포의 overlays/school을 학교 Rancher 클러스터의 trace 네임스페이스에 맞춘다.
+# 처음 한 번만 등록한다: kubectl apply -n argocd -f argocd/application.yaml (또는 Argo CD 화면에서 같은 값으로 만든다)
+# 이 파일은 overlays/school에 들어 있지 않아 Argo CD가 스스로 다시 적용하지 않는다. 고치면 위 명령을 다시 돌린다.
+# 레포가 비공개면 Argo CD Settings → Repositories에 읽기 전용 토큰으로 레포를 먼저 등록한다.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: trace
+  # Argo CD가 설치된 네임스페이스
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/GAKDO/gitops.git
+    targetRevision: main
+    path: overlays/school
+  destination:
+    # Argo CD가 도는 같은 클러스터
+    server: https://kubernetes.default.svc
+    # 네임스페이스는 인프라 관리자가 Rancher 프로젝트 안에 만들어 둔 것을 쓴다(여기서 만들지 않음)
+    namespace: trace
+  syncPolicy:
+    # main이 바뀌면 자동으로 맞춘다. prune: 레포에서 지운 리소스는 클러스터에서도 지운다
+    # selfHeal: 클러스터에서 손으로 바꾼 것(kubectl edit 등)은 레포 내용으로 되돌린다
+    automated:
+      prune: true
+      selfHeal: true

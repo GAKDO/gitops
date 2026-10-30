@@ -1,0 +1,97 @@
+# PostgreSQL은 클러스터 안 한 대뿐이라 이중화 대신 매일 백업한다.
+# 매일 03:30(KST) trace·labelstudio 두 DB를 pg_dump(custom 형식)로 떠서 학교 MinIO 버킷 trace-backups의 postgres/ 아래에 올리고,
+# 7일 지난 백업은 지운다. 클러스터 디스크에는 남기지 않는다. 복구: README "DB 백업과 복구".
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: pg-backup
+  labels: {app.kubernetes.io/name: pg-backup}
+spec:
+  schedule: "30 3 * * *"
+  timeZone: Asia/Seoul
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 1800
+      template:
+        metadata:
+          labels: {app.kubernetes.io/name: pg-backup}
+        spec:
+          restartPolicy: OnFailure
+          automountServiceAccountToken: false
+          enableServiceLinks: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 70
+            runAsGroup: 70
+            fsGroup: 70
+            seccompProfile: {type: RuntimeDefault}
+          # 1) 두 DB를 빈 폴더(/backup)에 덤프한다. 서버와 같은 메이저 버전(16)의 pg_dump를 쓴다
+          initContainers:
+            - name: dump
+              image: postgres:16-alpine
+              command: ["sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  # 새 파드의 네트워크 허용 규칙이 잡힐 때까지 잠시 기다린다
+                  n=0; until pg_isready -h postgres -U postgres -q; do n=$((n+1)); [ "$n" -lt 30 ] || exit 1; sleep 2; done
+                  stamp="$(date +%Y%m%d-%H%M)"
+                  for db in trace labelstudio; do
+                    f="/backup/$db-$stamp.dump"
+                    pg_dump -h postgres -U postgres -d "$db" -Fc -f "$f"
+                    [ -s "$f" ] || { echo "빈 백업: $db"; exit 1; }
+                  done
+                  ls -lh /backup
+              env:
+                - name: PGPASSWORD
+                  valueFrom: {secretKeyRef: {name: trace-postgres, key: POSTGRES_PASSWORD}}
+              resources:
+                requests: {cpu: 50m, memory: 64Mi}
+                limits: {memory: 256Mi}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: {drop: ["ALL"]}
+              volumeMounts:
+                - {name: backup, mountPath: /backup}
+          # 2) 덤프를 MinIO에 올리고 7일 지난 백업을 지운다. 버킷 trace-backups는 학교에서 받은 것을 쓴다(만들지 않음)
+          containers:
+            - name: upload
+              image: pgsty/mc:RELEASE.2026-09-16T00-00-00Z
+              command: ["sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  export MC_CONFIG_DIR=/tmp/mc
+                  mc alias set s3 "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY" >/dev/null
+                  mc ls "s3/$BACKUP_BUCKET" >/dev/null || { echo "버킷 $BACKUP_BUCKET 에 접근할 수 없습니다"; exit 1; }
+                  mc cp /backup/*.dump "s3/$BACKUP_BUCKET/postgres/"
+                  mc rm --recursive --force --older-than 7d "s3/$BACKUP_BUCKET/postgres/"
+                  mc ls "s3/$BACKUP_BUCKET/postgres/"
+              env:
+                - {name: BACKUP_BUCKET, value: trace-backups}
+                - name: MINIO_ENDPOINT
+                  valueFrom: {configMapKeyRef: {name: trace-infra, key: MINIO_ENDPOINT}}
+                - name: MINIO_ACCESS_KEY
+                  valueFrom: {secretKeyRef: {name: trace-secrets, key: MINIO_ACCESS_KEY}}
+                - name: MINIO_SECRET_KEY
+                  valueFrom: {secretKeyRef: {name: trace-secrets, key: MINIO_SECRET_KEY}}
+              resources:
+                requests: {cpu: 10m, memory: 32Mi}
+                limits: {memory: 128Mi}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: {drop: ["ALL"]}
+              volumeMounts:
+                - {name: backup, mountPath: /backup, readOnly: true}
+                - {name: tmp, mountPath: /tmp}
+          volumes:
+            - name: backup
+              emptyDir: {sizeLimit: 2Gi}
+            - name: tmp
+              emptyDir: {sizeLimit: 64Mi}

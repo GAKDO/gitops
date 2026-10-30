@@ -1,0 +1,90 @@
+# 학교 공용 PostgreSQL 접속 정보·권한을 받지 못해 PostgreSQL만 예외로 클러스터 안에 둔다 (StatefulSet + 영구 볼륨).
+# 밖으로 열지 않는다. 집 PC의 데이터셋 빌더는 필요할 때 kubectl port-forward로 붙는다. 백업은 pg-backup.yaml.
+# DB는 두 개: trace(서비스마다 스키마 하나), labelstudio(Label Studio 전용). 처음 뜰 때 init-db.sh가 만든다.
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  labels: {app.kubernetes.io/name: postgres}
+spec:
+  type: ClusterIP
+  selector: {app.kubernetes.io/name: postgres}
+  ports: [{name: pg, port: 5432, targetPort: pg}]
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  labels: {app.kubernetes.io/name: postgres}
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: postgres}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: postgres}
+    spec:
+      automountServiceAccountToken: false
+      # 같은 네임스페이스 Service마다 붙는 *_PORT=tcp://... 환경 변수를 끈다
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        # alpine 이미지의 postgres 사용자는 70이다
+        runAsUser: 70
+        runAsGroup: 70
+        fsGroup: 70
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          env:
+            # 관리자(postgres) 비밀번호. 앱은 이 계정을 쓰지 않는다
+            - name: POSTGRES_PASSWORD
+              valueFrom: {secretKeyRef: {name: trace-postgres, key: POSTGRES_PASSWORD}}
+            # 아래 네 값은 처음 뜰 때 init-db.sh가 계정을 만드는 데만 쓴다. 나중에 바꾸면 DB 안 비밀번호도 ALTER ROLE로 같이 바꾼다
+            - name: TRACE_DB_USER
+              valueFrom: {secretKeyRef: {name: trace-secrets, key: DB_USERNAME}}
+            - name: TRACE_DB_PASSWORD
+              valueFrom: {secretKeyRef: {name: trace-secrets, key: DB_PASSWORD}}
+            - name: LABELSTUDIO_DB_USER
+              valueFrom: {secretKeyRef: {name: trace-postgres, key: POSTGRE_USER}}
+            - name: LABELSTUDIO_DB_PASSWORD
+              valueFrom: {secretKeyRef: {name: trace-postgres, key: POSTGRE_PASSWORD}}
+            - {name: PGDATA, value: /var/lib/postgresql/data/pgdata}
+          ports: [{name: pg, containerPort: 5432}]
+          # TCP로 물어서, 처음 뜰 때 init 스크립트를 도는 임시 서버(소켓만 엶)는 준비로 보지 않는다
+          readinessProbe:
+            exec: {command: ["pg_isready", "-h", "127.0.0.1", "-U", "postgres"]}
+            periodSeconds: 5
+          # 재시작 직후 WAL 재생은 오래 걸릴 수 있어 최대 15분 기다린다. 여기를 지나야 liveness가 돈다
+          startupProbe:
+            exec: {command: ["pg_isready", "-h", "127.0.0.1", "-U", "postgres"]}
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 90
+          # 시작한 뒤 멈춘 채 살아만 있으면 다시 띄운다 (2분 연속 실패)
+          livenessProbe:
+            exec: {command: ["pg_isready", "-h", "127.0.0.1", "-U", "postgres"]}
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {cpu: "1", memory: 768Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/postgresql/data}
+            - {name: run, mountPath: /var/run/postgresql}
+            - {name: init, mountPath: /docker-entrypoint-initdb.d, readOnly: true}
+      volumes:
+        - {name: run, emptyDir: {}}
+        - name: init
+          configMap: {name: postgres-init}
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources: {requests: {storage: 10Gi}}

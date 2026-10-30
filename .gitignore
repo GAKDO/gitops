@@ -1,0 +1,6 @@
+# 비밀값. 예시(키 이름만)는 overlays/school/secret.env.example
+secret.env
+*.local.env
+
+# 클러스터 접속 파일
+kubeconfig*

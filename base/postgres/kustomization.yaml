@@ -1,0 +1,14 @@
+# 클러스터 안 PostgreSQL 16 (예외로 클러스터에 두는 유일한 인프라) + 첫 기동 초기화 + 매일 MinIO 백업.
+# 비밀번호는 trace-postgres·trace-secrets(Rancher에서 손으로 만듦)에서 읽는다.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - postgres.yaml
+  - pg-backup.yaml
+configMapGenerator:
+  # 처음 뜰 때만 쓰는 스크립트라 내용이 바뀌어도 PostgreSQL을 다시 띄울 필요가 없다. 그래서 이름에 해시를 붙이지 않는다
+  - name: postgres-init
+    files:
+      - 01-init-db.sh=init-db.sh
+    options:
+      disableNameSuffixHash: true
