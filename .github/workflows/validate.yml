@@ -31,11 +31,11 @@ jobs:
       - name: 비밀값이 커밋되지 않았는지 확인
         run: bash scripts/check-no-secrets.sh
       - name: 스크립트 문법 확인
-        run: for f in scripts/*.sh base/postgres/init-db.sh compose/init-db.sh; do bash -n "$f"; done
+        run: for f in scripts/*.sh base/postgres/init-db.sh compose/init-db.sh compose/init-env.sh; do bash -n "$f"; done
       # 로컬 Compose(G1)가 올바른지 본다. .env.example의 빈 값을 가짜 값으로 채워 변수 치환까지 확인한다(이미지는 받지 않음)
       - name: 로컬 Compose 설정 확인
         run: |
-          sed -E 's/^([A-Z_]+)=$/\1=ci-dummy/; s/^PUBLIC_BASE_URL=.*/PUBLIC_BASE_URL=http:\/\/localhost:8315/; s/^(WEB_PORT|WEB_BIND|INFRA_BIND|TRACE_TAG)=.*/\1=/' compose/.env.example > compose/.env
+          sed -E 's/^([A-Z_]+)=$/\1=ci-dummy/; s/^PUBLIC_BASE_URL=.*/PUBLIC_BASE_URL=http:\/\/localhost:8315/; s/^(WEB_PORT|WEB_BIND|INFRA_BIND|TRACE_TAG|[A-Z_]+_HOST_PORT)=.*/\1=/' compose/.env.example > compose/.env
           docker compose -f compose/docker-compose.yml config --quiet
           docker compose -f compose/docker-compose.yml config --format json | jq -e '.services["capture-server"].environment.MINIO_PUBLIC_BASE == "http://localhost:8315"' >/dev/null
           rm compose/.env
