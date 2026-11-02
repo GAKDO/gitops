@@ -1,0 +1,170 @@
+# TRACE 로컬 Compose (G1, NFR-06): 서버 6개 + web(nginx) + PostgreSQL·RabbitMQ·Redis·MinIO를 한 번에 띄운다.
+# 노트북과 학교 서버(10.116.64.12:8315 → trace.java21.net) 둘 다에서 같은 파일로 뜬다. 쿠버네티스·Cloudflare는 쓰지 않는다.
+#
+#   cd compose && cp .env.example .env   # 값 채우기 (커밋 금지)
+#   docker login ghcr.io                 # GHCR 패키지가 비공개면 read:packages 토큰으로 한 번
+#   docker compose up -d
+#
+# 입구는 web nginx 하나다(WEB_PORT, 기본 8315): / 화면, /api/ → gateway, /trace-captures/·/trace-derived/ → MinIO.
+# 앱 이미지·환경 변수 이름은 클러스터(overlays/school)와 같다. 접속 주소는 infra.env, 비밀은 .env에서 받는다.
+name: trace
+
+x-app: &app
+  platform: linux/amd64        # GHCR 이미지는 amd64만 있다(Apple Silicon은 에뮬레이션으로 돈다)
+  restart: unless-stopped      # 앱이 죽거나 지워져도 다시 뜬다
+  env_file:
+    - infra.env
+    - .env
+  environment: &app-env
+    SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-compose}
+    JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=75 -XX:+ExitOnOutOfMemoryError"
+    SERVER_SHUTDOWN: graceful
+    # 공개 주소에서 나오는 값. infra.env가 아니라 여기서 PUBLIC_BASE_URL 하나로 맞춘다
+    WEB_PUBLIC_URL: ${PUBLIC_BASE_URL:?.env의 PUBLIC_BASE_URL이 비어 있습니다}
+    TRACE_WEB_ORIGIN: ${PUBLIC_BASE_URL}
+    MINIO_PUBLIC_BASE: ${PUBLIC_BASE_URL}
+  mem_limit: 768m
+  depends_on: &app-deps
+    postgres:
+      condition: service_healthy
+    rabbitmq:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+    minio-init:
+      condition: service_completed_successfully
+
+services:
+  # ── 앱 ──
+  gateway:
+    <<: *app
+    image: ghcr.io/gakdo/gateway:${GATEWAY_TAG:-${TRACE_TAG:-develop}}
+  auth-server:
+    <<: *app
+    image: ghcr.io/gakdo/auth-server:${AUTH_SERVER_TAG:-${TRACE_TAG:-develop}}
+  rental-server:
+    <<: *app
+    image: ghcr.io/gakdo/rental-server:${RENTAL_SERVER_TAG:-${TRACE_TAG:-develop}}
+  capture-server:
+    <<: *app
+    image: ghcr.io/gakdo/capture-server:${CAPTURE_SERVER_TAG:-${TRACE_TAG:-develop}}
+  diagnostics-server:
+    <<: *app
+    image: ghcr.io/gakdo/diagnostics-server:${DIAGNOSTICS_SERVER_TAG:-${TRACE_TAG:-develop}}
+  report-server:
+    <<: *app
+    image: ghcr.io/gakdo/report-server:${REPORT_SERVER_TAG:-${TRACE_TAG:-develop}}
+
+  web:
+    platform: linux/amd64
+    image: ghcr.io/gakdo/web:${WEB_TAG:-${TRACE_TAG:-develop}}
+    restart: unless-stopped
+    environment:
+      API_UPSTREAM: gateway:8080
+      MINIO_UPSTREAM: minio:9000
+    ports:
+      - "${WEB_BIND:-0.0.0.0}:${WEB_PORT:-8315}:8080"
+    # tls/에 tls.crt·tls.key가 있으면 HTTPS로 연다(폰 카메라는 HTTPS 필요). 앞에 TLS 프록시가 있으면 비워 둔다
+    volumes:
+      - ./tls:/etc/trace-tls:ro
+    mem_limit: 128m
+    depends_on:
+      - gateway
+
+  # ── 인프라 (모두 고정 태그, decisions.md 11/2) ──
+  postgres:
+    image: postgres:16.15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?.env의 POSTGRES_PASSWORD가 비어 있습니다}
+      TRACE_DB_USER: ${DB_USERNAME:?.env의 DB_USERNAME이 비어 있습니다}
+      TRACE_DB_PASSWORD: ${DB_PASSWORD:?.env의 DB_PASSWORD가 비어 있습니다}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./init-db.sh:/docker-entrypoint-initdb.d/10-trace.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d trace"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    mem_limit: 512m
+
+  rabbitmq:
+    image: rabbitmq:4.1.8-management-alpine
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USERNAME:?.env의 RABBITMQ_USERNAME이 비어 있습니다}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?.env의 RABBITMQ_PASSWORD가 비어 있습니다}
+      RABBITMQ_DEFAULT_VHOST: /trace
+    # 집 PC 워커(inspect-worker)가 붙을 포트. 기본은 이 기기에서만 열고, 같은 망에 열려면 INFRA_BIND=0.0.0.0
+    ports:
+      - "${INFRA_BIND:-127.0.0.1}:5672:5672"
+      - "${INFRA_BIND:-127.0.0.1}:15672:15672"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+    mem_limit: 512m
+
+  redis:
+    image: redis:7.4.12-alpine
+    restart: unless-stopped
+    command: ["sh", "-c", 'exec redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD"']
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?.env의 REDIS_PASSWORD가 비어 있습니다}
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", 'REDISCLI_AUTH="$$REDIS_PASSWORD" redis-cli ping | grep -q PONG']
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    mem_limit: 128m
+
+  # Docker Hub minio/minio는 받을 수 없어 pg-backup의 pgsty/mc와 같은 곳의 pgsty/minio를 쓴다(decisions.md 11/2)
+  minio:
+    image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z
+    restart: unless-stopped
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:?.env의 MINIO_ACCESS_KEY가 비어 있습니다}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:?.env의 MINIO_SECRET_KEY가 비어 있습니다}
+    ports:
+      - "${INFRA_BIND:-127.0.0.1}:9000:9000"
+      - "${INFRA_BIND:-127.0.0.1}:9001:9001"
+    volumes:
+      - minio-data:/data
+    mem_limit: 512m
+
+  # 버킷을 만들고 끝난다(이미 있으면 그대로). 모두 비공개이고 사진은 사전 서명 URL로만 오간다
+  minio-init:
+    image: pgsty/mc:RELEASE.2026-09-16T00-00-00Z
+    restart: "no"
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        set -eu
+        export MC_CONFIG_DIR=/tmp/mc
+        for i in $$(seq 1 30); do
+          mc alias set local http://minio:9000 "$$MINIO_ACCESS_KEY" "$$MINIO_SECRET_KEY" >/dev/null 2>&1 && break
+          echo "MinIO 기다리는 중 ($$i)"; sleep 2
+        done
+        for b in trace-captures trace-derived; do
+          mc mb --ignore-existing "local/$$b"
+          mc anonymous set none "local/$$b"
+        done
+        mc ls local
+    environment:
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
+    depends_on:
+      - minio
+
+volumes:
+  postgres-data:
+  rabbitmq-data:
+  redis-data:
+  minio-data:

@@ -4,3 +4,6 @@ secret.env
 
 # 클러스터 접속 파일
 kubeconfig*
+
+# 로컬 Compose 비밀값
+compose/.env
