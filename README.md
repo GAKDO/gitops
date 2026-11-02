@@ -144,7 +144,8 @@ PR과 `main`·`develop` 푸시마다 "매니페스트 검증"이 비밀값 검�
 
 ```bash
 cd compose
-cp .env.example .env        # PUBLIC_BASE_URL과 비밀값을 채운다 (커밋 금지)
+./init-env.sh               # .env를 만들고 빈 계정·비밀 값을 무작위로 채운다(있는 값은 그대로, 커밋 금지)
+                            # 그다음 .env에 PUBLIC_BASE_URL(필요하면 ADMIN_EMAIL·DEMO_CUSTOMER_EMAIL·SMTP_*)을 채운다
 docker login ghcr.io        # GHCR 패키지가 비공개면 read:packages 토큰으로 한 번
 docker compose up -d
 docker compose ps           # minio-init은 버킷을 만들고 Exited (0)이면 정상
