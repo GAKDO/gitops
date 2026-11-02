@@ -1,0 +1,18 @@
+# InfluxDB v2(Flux) 데이터 소스. 값은 파드 환경 변수에서 채운다.
+# INFLUX_URL·INFLUX_BUCKET·INFLUX_ORG는 ConfigMap trace-infra, INFLUX_READ_TOKEN은 Secret trace-secrets(읽기 전용 토큰)
+apiVersion: 1
+datasources:
+  - name: trace-pilot
+    uid: trace-pilot
+    type: influxdb
+    access: proxy
+    url: $INFLUX_URL
+    isDefault: true
+    editable: false
+    jsonData:
+      version: Flux
+      organization: $INFLUX_ORG
+      defaultBucket: $INFLUX_BUCKET
+      timeout: 30
+    secureJsonData:
+      token: $INFLUX_READ_TOKEN

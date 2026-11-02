@@ -1,0 +1,18 @@
+# grafana: 파일럿 추이 대시보드(FR-PIL-02). 학교 공용 Grafana를 쓰지 않고 우리 네임스페이스에 직접 띄운다.
+# 데이터 소스(trace-pilot)와 대시보드는 아래 파일에서 자동으로 올라오므로 화면에서 가져오기를 하지 않는다.
+# 대시보드 원본은 GAKDO/web grafana/pilot-trend.dashboard.json이다. 그 파일을 고치면 이 복사본도 같이 바꾼다
+# (차이: __inputs를 빼고 데이터 소스 uid를 trace-pilot으로 고정).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - deployment.yaml
+  - service.yaml
+# 파일 내용이 바뀌면 이름 해시가 바뀌어 파드가 새로 뜬다
+configMapGenerator:
+  - name: grafana-provisioning
+    files:
+      - datasources.yaml=provisioning/datasources.yaml
+      - dashboards.yaml=provisioning/dashboards.yaml
+  - name: grafana-dashboards
+    files:
+      - pilot-trend.dashboard.json

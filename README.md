@@ -15,7 +15,8 @@ gitops/
 │   │   ├── gateway/             외부 API 입구 (Spring Cloud Gateway)
 │   │   ├── web/                 웹앱 (nginx-unprivileged)
 │   │   ├── auth-server/ rental-server/ capture-server/ diagnostics-server/ report-server/
-│   │   └── label-studio/        heartexlabs/label-studio:1.19.0 + 2Gi PVC
+│   │   ├── label-studio/        heartexlabs/label-studio:1.19.0 + 2Gi PVC
+│   │   └── grafana/             grafana/grafana:12.1.1 + 1Gi PVC, 데이터 소스·파일럿 대시보드 자동 등록
 │   ├── postgres/                PostgreSQL 16 StatefulSet(10Gi) + 첫 기동 초기화(init-db.sh) + 매일 MinIO 백업(pg-backup)
 │   └── network/                 들어오는 연결 기본 차단 + 같은 네임스페이스 허용 + 밖으로 여는 3개만 허용
 ├── overlays/school/             학교 클러스터 운영 구성 (Argo CD가 보는 곳)
@@ -80,13 +81,14 @@ PR과 `main`·`develop` 푸시마다 "매니페스트 검증"이 비밀값 검�
 
 ## 밖으로 열린 포트
 
-학교 서버는 NodePort를 8300~8499에서 학생마다 10개씩 나눠 준다. A 계정 범위(8310~8319) 중 8316 하나만 쓰고, 8318은 지난 프로젝트가 쓰고 있다. 나머지는 예비다. gateway·web은 NodePort 없이 Cloudflare Tunnel로만 공개한다(학교망에 평문 HTTP 포트를 열지 않고, 요청 제한이 믿는 `CF-Connecting-IP` 헤더를 위조할 경로도 없앤다).
+학교 서버는 NodePort를 8300~8499에서 학생마다 10개씩 나눠 준다. A 계정 범위(8310~8319) 중 8316·8317을 쓰고, 8318은 지난 프로젝트가 쓰고 있다. 나머지는 예비다. gateway·web은 NodePort 없이 Cloudflare Tunnel로만 공개한다(학교망에 평문 HTTP 포트를 열지 않고, 요청 제한이 믿는 `CF-Connecting-IP` 헤더를 위조할 경로도 없앤다).
 
 | NodePort | 서비스 | 용도 |
 |---|---|---|
 | 없음 | gateway | API. `https://gakdo.site/api/...`(터널). 클러스터 안에서 확인할 땐 `kubectl -n trace port-forward svc/gateway 8080:8080` |
 | 없음 | web | 웹. `https://gakdo.site`(터널) |
 | 8316 | label-studio | 학습 데이터 라벨링 |
+| 8317 | grafana | 파일럿 추이 대시보드 `/d/trace-pilot-trend` (로그인 없이 보기, 관리는 admin) |
 
 나머지 서버 5개와 postgres는 같은 네임스페이스 안에서만 닿는다(`base/network`). 클러스터 안 앱은 모두 8080으로 받고, 서로 `http://<서비스 이름>:8080`으로 부른다. 집 PC에서 DB가 필요하면 `kubectl -n trace port-forward svc/postgres 5432:5432`로 붙는다.
 
@@ -100,6 +102,7 @@ PR과 `main`·`develop` 푸시마다 "매니페스트 검증"이 비밀값 검�
 | 밖으로 여는 포트 | `overlays/school/kustomization.yaml`의 `patches:` | |
 | 리소스·프로브·보안 설정 | `base/apps/<앱>/deployment.yaml` | |
 | Label Studio 버전 | `base/apps/label-studio/deployment.yaml`의 `image:` | 앱 레포가 없어 여기서 직접 올린다 |
+| Grafana 버전·대시보드 | `base/apps/grafana/` | 대시보드 원본은 GAKDO/web `grafana/pilot-trend.dashboard.json`. 고치면 여기 복사본도 같이 바꾼다 |
 | DB·스키마 | `base/postgres/init-db.sh` | 데이터가 빈 첫 기동 때만 돈다. 이미 뜬 DB에는 `psql`로 직접 만든다 |
 | 백업 시각·보관 기간 | `base/postgres/pg-backup.yaml` | |
 | 네트워크 허용 | `base/network/` | 나가는 연결은 막지 않는다 |

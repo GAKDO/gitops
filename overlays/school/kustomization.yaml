@@ -20,6 +20,7 @@ resources:
 - ../../base/apps/diagnostics-server
 - ../../base/apps/report-server
 - ../../base/apps/label-studio
+- ../../base/apps/grafana
 - ../../base/apps/cloudflared
 - ../../base/postgres
 - ../../base/network
@@ -53,7 +54,7 @@ configMapGenerator:
   name: trace-infra
   options:
     disableNameSuffixHash: true
-# 밖으로 여는 서비스는 label-studio 하나(NodePort 8316). gateway·web은 Cloudflare Tunnel(cloudflared)로만 공개해
+# 밖으로 여는 서비스는 label-studio(NodePort 8316)와 grafana(NodePort 8317). gateway·web은 Cloudflare Tunnel(cloudflared)로만 공개해
 # 학교망에 평문 HTTP 포트를 열지 않고 CF-Connecting-IP 헤더 위조 경로도 막는다. 학교 서버는 NodePort를 8300~8499에서
 # 학생마다 10개씩 나눠 주고, A 계정 범위는 8310~8319다
 patches:
@@ -67,3 +68,13 @@ patches:
   target:
     kind: Service
     name: label-studio
+- patch: |-
+    - op: replace
+      path: /spec/type
+      value: NodePort
+    - op: add
+      path: /spec/ports/0/nodePort
+      value: 8317
+  target:
+    kind: Service
+    name: grafana
