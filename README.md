@@ -159,7 +159,7 @@ docker compose ps           # minio-init은 버킷을 만들고 Exited (0)이면
 - **공개 주소**: `.env`의 `PUBLIC_BASE_URL` 하나가 `WEB_PUBLIC_URL`(QR 링크)·`TRACE_WEB_ORIGIN`(CORS)·`MINIO_PUBLIC_BASE`(사진 URL)가 된다. 폰 카메라는 HTTPS에서만 되므로 폰 수령 촬영은 `https://` 주소(학교 서버의 강사님 nginx, 또는 `compose/tls/`에 `tls.crt`·`tls.key`)로 연다.
 - **이미지 태그**: 기본 `develop`(develop 푸시마다 갱신). `TRACE_TAG=latest`면 main 릴리스, 앱 하나만 바꾸려면 `CAPTURE_SERVER_TAG=<커밋 SHA>`처럼. 바꾼 뒤 `docker compose pull && docker compose up -d`.
 - **자동 재시작**: 모든 서비스가 `restart: unless-stopped`라 앱이 죽으면 다시 뜬다(`docker compose kill capture-server` 뒤에도 다시 뜸. `stop`은 손으로 멈춘 것으로 본다).
-- **집 PC 워커**: RabbitMQ(5672)·MinIO(9000)는 기본으로 이 기기(127.0.0.1)에서만 열린다. 같은 망의 워커가 붙어야 하면 `INFRA_BIND=0.0.0.0`.
+- **집 PC 워커**: RabbitMQ(5672)·MinIO(9000)는 기본으로 이 기기(127.0.0.1)에서만 열린다. 같은 망의 워커가 붙어야 하면 `INFRA_BIND=0.0.0.0`. 같은 기기에서 포트가 이미 쓰이면 `RABBITMQ_HOST_PORT`·`RABBITMQ_MGMT_HOST_PORT`·`MINIO_HOST_PORT`·`MINIO_CONSOLE_HOST_PORT`로 호스트 포트만 바꾼다(학교 서버는 9000·9001이 다른 MinIO라 19000·19001). 컨테이너끼리는 그대로 `rabbitmq:5672`·`minio:9000`.
 - **초기화**: DB 계정·스키마는 postgres 볼륨이 비어 있을 때 `compose/init-db.sh`가 한 번 만든다. 처음부터 다시 하려면 `docker compose down -v`(데이터가 모두 사라진다).
 - **Apple Silicon**: GHCR 이미지가 amd64뿐이라 에뮬레이션으로 돈다(Docker Desktop의 Rosetta 사용 권장). 처음 기동이 몇 분 걸릴 수 있다.
 - InfluxDB(파일럿 추이)는 들어 있지 않다. 학교 InfluxDB는 내부망 전용이라 학교 서버에서 띄울 때만 `infra.env`의 `INFLUX_URL`을 채운다.
