@@ -9,22 +9,30 @@
 # 앱 이미지·환경 변수 이름은 클러스터(overlays/school)와 같다. 접속 주소는 infra.env, 비밀은 .env에서 받는다.
 name: trace
 
+# 비밀은 .env에서 Compose 변수로만 읽고, 컨테이너에는 그 서비스가 쓰는 값만 넘긴다(.env 통째로 넣지 않음)
+x-app-env: &app-env
+  SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-compose}
+  JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=75 -XX:+ExitOnOutOfMemoryError"
+  SERVER_SHUTDOWN: graceful
+  # 공개 주소에서 나오는 값. infra.env가 아니라 여기서 PUBLIC_BASE_URL 하나로 맞춘다
+  WEB_PUBLIC_URL: ${PUBLIC_BASE_URL:?.env의 PUBLIC_BASE_URL이 비어 있습니다}
+  TRACE_WEB_ORIGIN: ${PUBLIC_BASE_URL}
+  MINIO_PUBLIC_BASE: ${PUBLIC_BASE_URL}
+  REDIS_PASSWORD: ${REDIS_PASSWORD}
+# DB·메시지를 쓰는 서버 5개 공통
+x-server-secrets: &server-secrets
+  DB_USERNAME: ${DB_USERNAME}
+  DB_PASSWORD: ${DB_PASSWORD}
+  RABBITMQ_USERNAME: ${RABBITMQ_USERNAME}
+  RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+
 x-app: &app
   platform: linux/amd64        # GHCR 이미지는 amd64만 있다(Apple Silicon은 에뮬레이션으로 돈다)
   restart: unless-stopped      # 앱이 죽거나 지워져도 다시 뜬다
   env_file:
     - infra.env
-    - .env
-  environment: &app-env
-    SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-compose}
-    JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=75 -XX:+ExitOnOutOfMemoryError"
-    SERVER_SHUTDOWN: graceful
-    # 공개 주소에서 나오는 값. infra.env가 아니라 여기서 PUBLIC_BASE_URL 하나로 맞춘다
-    WEB_PUBLIC_URL: ${PUBLIC_BASE_URL:?.env의 PUBLIC_BASE_URL이 비어 있습니다}
-    TRACE_WEB_ORIGIN: ${PUBLIC_BASE_URL}
-    MINIO_PUBLIC_BASE: ${PUBLIC_BASE_URL}
   mem_limit: 768m
-  depends_on: &app-deps
+  depends_on:
     postgres:
       condition: service_healthy
     rabbitmq:
@@ -39,21 +47,46 @@ services:
   gateway:
     <<: *app
     image: ghcr.io/gakdo/gateway:${GATEWAY_TAG:-${TRACE_TAG:-develop}}
+    environment:
+      <<: *app-env
   auth-server:
     <<: *app
     image: ghcr.io/gakdo/auth-server:${AUTH_SERVER_TAG:-${TRACE_TAG:-develop}}
+    environment:
+      <<: [*app-env, *server-secrets]
+      JWT_PRIVATE_KEY: ${JWT_PRIVATE_KEY:-}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      BOOTH_CLIENT_ID: ${BOOTH_CLIENT_ID:-}
+      BOOTH_CLIENT_SECRET: ${BOOTH_CLIENT_SECRET:-}
+      DEMO_CUSTOMER_EMAIL: ${DEMO_CUSTOMER_EMAIL:-}
+      DEMO_CUSTOMER_PASSWORD: ${DEMO_CUSTOMER_PASSWORD:-}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
   rental-server:
     <<: *app
     image: ghcr.io/gakdo/rental-server:${RENTAL_SERVER_TAG:-${TRACE_TAG:-develop}}
+    environment:
+      <<: [*app-env, *server-secrets]
   capture-server:
     <<: *app
     image: ghcr.io/gakdo/capture-server:${CAPTURE_SERVER_TAG:-${TRACE_TAG:-develop}}
+    environment:
+      <<: [*app-env, *server-secrets]
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
   diagnostics-server:
     <<: *app
     image: ghcr.io/gakdo/diagnostics-server:${DIAGNOSTICS_SERVER_TAG:-${TRACE_TAG:-develop}}
+    environment:
+      <<: [*app-env, *server-secrets]
+      INFLUX_TOKEN: ${INFLUX_TOKEN:-}
   report-server:
     <<: *app
     image: ghcr.io/gakdo/report-server:${REPORT_SERVER_TAG:-${TRACE_TAG:-develop}}
+    environment:
+      <<: [*app-env, *server-secrets]
+      CHAIN_SIGNING_KEY: ${CHAIN_SIGNING_KEY:-}
 
   web:
     platform: linux/amd64
@@ -96,10 +129,11 @@ services:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USERNAME:?.env의 RABBITMQ_USERNAME이 비어 있습니다}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?.env의 RABBITMQ_PASSWORD가 비어 있습니다}
       RABBITMQ_DEFAULT_VHOST: /trace
-    # 집 PC 워커(inspect-worker)가 붙을 포트. 기본은 이 기기에서만 열고, 같은 망에 열려면 INFRA_BIND=0.0.0.0
+    # 집 PC 워커(inspect-worker)가 붙을 AMQP 포트. 기본은 이 기기에서만 열고, 같은 망에 열려면 INFRA_BIND=0.0.0.0
+    # 관리 화면(15672, 평문 HTTP 로그인)은 언제나 이 기기에서만 연다
     ports:
       - "${INFRA_BIND:-127.0.0.1}:5672:5672"
-      - "${INFRA_BIND:-127.0.0.1}:15672:15672"
+      - "127.0.0.1:15672:15672"
     volumes:
       - rabbitmq-data:/var/lib/rabbitmq
     healthcheck:
@@ -134,7 +168,7 @@ services:
       MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:?.env의 MINIO_SECRET_KEY가 비어 있습니다}
     ports:
       - "${INFRA_BIND:-127.0.0.1}:9000:9000"
-      - "${INFRA_BIND:-127.0.0.1}:9001:9001"
+      - "127.0.0.1:9001:9001"   # 콘솔은 언제나 이 기기에서만
     volumes:
       - minio-data:/data
     mem_limit: 512m
