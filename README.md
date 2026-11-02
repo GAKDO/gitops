@@ -57,16 +57,24 @@ PR과 `main`·`develop` 푸시마다 "매니페스트 검증"이 비밀값 검�
    scripts/create-secrets.sh                                          # kubectl이 학교 클러스터를 가리키고 있어야 한다
    ```
    Rancher 화면(Storage → Secrets, 네임스페이스 `trace`)에서 같은 이름·키로 직접 만들어도 된다. 어느 키가 어느 Secret에 들어가는지는 `secret.env.example`에 있다.
-2. **GHCR 받기용 Secret** (패키지가 비공개일 때만): 앱 Deployment는 `ghcr-pull`을 참조한다. 패키지가 공개면 만들지 않아도 된다(경고만 남고 이미지는 받는다).
+2. **HTTPS 인증서 Secret** (`trace-tls`): web(8315)과 gateway(8314)가 이 인증서로 HTTPS만 받는다(폰 촬영 카메라가 HTTPS를 요구함). 없으면 두 파드가 만들어지지 않고 기다린다. 도메인 `gakdo.site`의 Let's Encrypt 인증서를 DNS 인증으로 받아 넣는다(90일 유효).
+   ```bash
+   certbot certonly --manual --preferred-challenges dns -d gakdo.site \
+     --config-dir ~/trace-cert --work-dir ~/trace-cert/work --logs-dir ~/trace-cert/logs   # 가비아 DNS에 _acme-challenge TXT 추가
+   kubectl -n trace create secret tls trace-tls \
+     --cert ~/trace-cert/live/gakdo.site/fullchain.pem --key ~/trace-cert/live/gakdo.site/privkey.pem
+   ```
+   갱신할 때는 같은 certbot 명령 뒤 `kubectl -n trace create secret tls trace-tls ... --dry-run=client -o yaml | kubectl apply -f -`로 바꾸고 `kubectl -n trace rollout restart deploy/web deploy/gateway`.
+3. **GHCR 받기용 Secret** (패키지가 비공개일 때만): 앱 Deployment는 `ghcr-pull`을 참조한다. 패키지가 공개면 만들지 않아도 된다(경고만 남고 이미지는 받는다).
    ```bash
    kubectl -n trace create secret docker-registry ghcr-pull \
      --docker-server=ghcr.io --docker-username=<GitHub 사용자> --docker-password=<read:packages 권한 토큰>
    ```
-3. **Argo CD에 등록**: 레포가 비공개면 Argo CD Settings → Repositories에 읽기 전용 토큰으로 이 레포를 먼저 등록한다.
+4. **Argo CD에 등록**: 레포가 비공개면 Argo CD Settings → Repositories에 읽기 전용 토큰으로 이 레포를 먼저 등록한다.
    ```bash
    kubectl apply -n argocd -f argocd/application.yaml   # 또는 Argo CD 화면에서 같은 값으로 만든다
    ```
-4. **확인**: Argo CD 화면에서 `trace`가 Synced·Healthy인지, `kubectl -n trace get pods`로 파드가 모두 Running인지 본다. 앱 이미지가 아직 GHCR에 없으면 그 앱만 ImagePullBackOff로 남는다(앱 레포가 처음 올리면 풀린다).
+5. **확인**: Argo CD 화면에서 `trace`가 Synced·Healthy인지, `kubectl -n trace get pods`로 파드가 모두 Running인지 본다. 앱 이미지가 아직 GHCR에 없으면 그 앱만 ImagePullBackOff로 남는다(앱 레포가 처음 올리면 풀린다).
 
 ## 밖으로 열린 포트
 
@@ -74,11 +82,11 @@ PR과 `main`·`develop` 푸시마다 "매니페스트 검증"이 비밀값 검�
 
 | NodePort | 서비스 | 용도 |
 |---|---|---|
-| 8314 | gateway | API (부스·폰·관리 화면·진단 에이전트가 부름) |
-| 8315 | web | 웹 (리포트·3D 트윈·폰 촬영·관리 화면) |
+| 8314 | gateway | API, `https://gakdo.site:8314` (부스·폰·관리 화면·진단 에이전트가 부름) |
+| 8315 | web | 웹, `https://gakdo.site:8315` (리포트·3D 트윈·폰 촬영·관리 화면) |
 | 8316 | label-studio | 학습 데이터 라벨링 |
 
-나머지 서버 5개와 postgres는 같은 네임스페이스 안에서만 닿는다(`base/network`). 클러스터 안 앱은 모두 8080으로 받고, 서로 `http://<서비스 이름>:8080`으로 부른다. 집 PC에서 DB가 필요하면 `kubectl -n trace port-forward svc/postgres 5432:5432`로 붙는다.
+나머지 서버 5개와 postgres는 같은 네임스페이스 안에서만 닿는다(`base/network`). 클러스터 안 앱은 모두 8080으로 받고, 서로 `http://<서비스 이름>:8080`으로 부른다(web·gateway만 TLS라 `https://`). 집 PC에서 DB가 필요하면 `kubectl -n trace port-forward svc/postgres 5432:5432`로 붙는다.
 
 ## 어디를 바꾸나
 
