@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # overlays/school/secret.env(커밋 금지)를 읽어 trace 네임스페이스에 Secret 두 개를 만든다. 이미 있으면 새 값으로 바꾼다.
 #   trace-postgres: POSTGRES_PASSWORD, POSTGRE_USER, POSTGRE_PASSWORD
-#   trace-secrets : 나머지 키 전부
+#   trace-secrets : 나머지 키 전부 (grafana는 이 중 GRAFANA_ADMIN_PASSWORD·INFLUX_READ_TOKEN만 받는다)
 # 사용: scripts/create-secrets.sh [secret.env 경로]   (kubectl이 학교 클러스터를 가리키고 있어야 한다)
 # 값이 빈 키는 넣지 않는다. 그 키를 쓰는 기능만 동작하지 않는다.
 # Secret을 바꿔도 떠 있는 파드는 그대로다: kubectl -n trace rollout restart deploy

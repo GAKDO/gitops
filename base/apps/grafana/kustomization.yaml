@@ -1,0 +1,20 @@
+# grafana: 파일럿 추이 대시보드(FR-PIL-02). NFR-05의 두 번째 예외(11/2 결정, docs decisions.md):
+# 학교 InfluxDB는 내부망 전용이라 학교 밖에서 닿지 않고, 학교 Grafana는 관리자 계정을 잃었다.
+# 밖으로는 web nginx가 /grafana/를 http://grafana:3000으로 넘겨 https://gakdo.site/grafana/로 연다. NodePort는 없다.
+#
+# provisioning/의 세 파일은 원본이 web 레포 grafana/이고 여기는 그 복사본이다. 바꾸면 같이 갱신한다.
+#   web grafana/provisioning/datasources/trace-pilot.yaml → provisioning/trace-pilot.datasource.yaml
+#   web grafana/provisioning/dashboards/trace.yaml       → provisioning/trace.dashboards.yaml
+#   web grafana/pilot-trend.dashboard.json               → provisioning/pilot-trend.dashboard.json (JSON이라 주석 없이 그대로)
+# ConfigMap 이름에 내용 해시가 붙어, 파일을 바꾸면 Grafana 파드가 저절로 다시 뜬다.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - deployment.yaml
+  - service.yaml
+configMapGenerator:
+  - name: grafana-provisioning
+    files:
+      - provisioning/trace-pilot.datasource.yaml
+      - provisioning/trace.dashboards.yaml
+      - provisioning/pilot-trend.dashboard.json

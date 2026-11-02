@@ -2,7 +2,7 @@
 
 TRACE(노트북 렌탈 상태 기록 서비스)의 쿠버네티스 배포 설정 레포다. 학교 서버의 Argo CD가 이 레포 `main`의 `overlays/school`을 학교 Rancher 클러스터의 `trace` 네임스페이스에 그대로 맞춘다.
 
-앱 코드는 없다. 앱 8개(gateway, web, 서버 5개, Label Studio)와 PostgreSQL의 매니페스트, 그리고 지금 배포된 이미지 태그만 둔다. 학교 공유 인프라(MinIO·RabbitMQ·Redis·InfluxDB·Elasticsearch)는 클러스터에 올리지 않고 주소로만 붙는다. PostgreSQL만 예외로 클러스터 안에 둔다(학교 PostgreSQL 접속 정보·권한을 받지 못함).
+앱 코드는 없다. 앱 8개(gateway, web, 서버 5개, Label Studio)와 PostgreSQL의 매니페스트, 그리고 지금 배포된 이미지 태그만 둔다. 학교 공유 인프라(MinIO·RabbitMQ·Redis·InfluxDB·Elasticsearch)는 클러스터에 올리지 않고 주소로만 붙는다. 예외는 둘이다. PostgreSQL(학교 PostgreSQL 접속 정보·권한을 받지 못함)과 파일럿 대시보드 Grafana(학교 Grafana 관리자 계정 분실, InfluxDB가 학교 내부망 전용, 11/2 결정).
 
 비밀번호·키·토큰은 이 레포에 **절대 넣지 않는다.** Secret은 Rancher에서 손으로 만든다(또는 `scripts/create-secrets.sh`).
 
@@ -15,7 +15,8 @@ gitops/
 │   │   ├── gateway/             외부 API 입구 (Spring Cloud Gateway)
 │   │   ├── web/                 웹앱 (nginx-unprivileged)
 │   │   ├── auth-server/ rental-server/ capture-server/ diagnostics-server/ report-server/
-│   │   └── label-studio/        heartexlabs/label-studio:1.19.0 + 2Gi PVC
+│   │   ├── label-studio/        heartexlabs/label-studio:1.19.0 + 2Gi PVC
+│   │   └── grafana/             grafana/grafana-oss:12.1.1, 저장 공간 없이 provisioning만 (원본 web grafana/)
 │   ├── postgres/                PostgreSQL 16 StatefulSet(10Gi) + 첫 기동 초기화(init-db.sh) + 매일 MinIO 백업(pg-backup)
 │   └── network/                 들어오는 연결 기본 차단 + 같은 네임스페이스 허용 + 밖으로 여는 3개만 허용
 ├── overlays/school/             학교 클러스터 운영 구성 (Argo CD가 보는 곳)
@@ -87,6 +88,7 @@ PR과 `main`·`develop` 푸시마다 "매니페스트 검증"이 비밀값 검�
 | 없음 | gateway | API. `https://gakdo.site/api/...`(터널). 클러스터 안에서 확인할 땐 `kubectl -n trace port-forward svc/gateway 8080:8080` |
 | 없음 | web | 웹. `https://gakdo.site`(터널) |
 | 8316 | label-studio | 학습 데이터 라벨링 |
+| 없음 | grafana | 파일럿 추이 대시보드. `https://gakdo.site/grafana/`(web nginx가 `http://grafana:3000`으로 넘김). 익명은 보기만, 편집은 admin |
 
 나머지 서버 5개와 postgres는 같은 네임스페이스 안에서만 닿는다(`base/network`). 클러스터 안 앱은 모두 8080으로 받고, 서로 `http://<서비스 이름>:8080`으로 부른다. 집 PC에서 DB가 필요하면 `kubectl -n trace port-forward svc/postgres 5432:5432`로 붙는다.
 
@@ -100,6 +102,7 @@ PR과 `main`·`develop` 푸시마다 "매니페스트 검증"이 비밀값 검�
 | 밖으로 여는 포트 | `overlays/school/kustomization.yaml`의 `patches:` | |
 | 리소스·프로브·보안 설정 | `base/apps/<앱>/deployment.yaml` | |
 | Label Studio 버전 | `base/apps/label-studio/deployment.yaml`의 `image:` | 앱 레포가 없어 여기서 직접 올린다 |
+| Grafana 버전·대시보드 | `base/apps/grafana/deployment.yaml`의 `image:`, `base/apps/grafana/provisioning/` | provisioning 원본은 web `grafana/`. 거기를 먼저 고치고 여기에 같이 복사한다. 파일을 바꾸면 파드가 저절로 다시 뜬다 |
 | DB·스키마 | `base/postgres/init-db.sh` | 데이터가 빈 첫 기동 때만 돈다. 이미 뜬 DB에는 `psql`로 직접 만든다 |
 | 백업 시각·보관 기간 | `base/postgres/pg-backup.yaml` | |
 | 네트워크 허용 | `base/network/` | 나가는 연결은 막지 않는다 |
