@@ -87,7 +87,7 @@ services:
     environment:
       <<: [*app-env, *server-secrets]
       # 해시 체인 서명 키(Ed25519). 비면 report-server가 뜨지 않으므로 Compose 단계에서 먼저 막는다
-      CHAIN_SIGNING_KEY: ${CHAIN_SIGNING_KEY:?.env의 CHAIN_SIGNING_KEY가 비어 있습니다(openssl genpkey -algorithm ed25519 | base64 -w0)}
+      CHAIN_SIGNING_KEY: ${CHAIN_SIGNING_KEY:?.env의 CHAIN_SIGNING_KEY가 비어 있습니다(openssl genpkey -algorithm ed25519 | base64 | tr -d '\n')}
       # 검증할 때 봉인한 사진이 MinIO에서 바뀌지 않았는지 다시 본다
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
