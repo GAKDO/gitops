@@ -55,10 +55,10 @@ spec:
             limits:
               cpu: 200m
               memory: 128Mi
-          # /ready는 Cloudflare 에지와 연결이 하나라도 있을 때 200
+          # liveness는 프로세스 상태(/healthcheck), readiness는 에지 연결이 하나라도 있을 때 200(/ready)
           livenessProbe:
             httpGet:
-              path: /ready
+              path: /healthcheck
               port: metrics
             initialDelaySeconds: 10
             periodSeconds: 10
