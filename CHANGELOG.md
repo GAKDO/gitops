@@ -10,6 +10,10 @@ main에 버전이 적힌 CHANGELOG가 올라가면 release.yml이 태그와 GitH
 
 - 파일럿 추이 Grafana(`base/apps/grafana`, NFR-05 예외): grafana-oss 12.1.1, provisioning은 web `grafana/` 복사본, 공개 주소 `https://gakdo.site/grafana/`. trace-secrets에 `GRAFANA_ADMIN_PASSWORD`·`INFLUX_READ_TOKEN`, infra.env에 `INFLUX_ORG` 자리 추가, `INFLUX_URL`은 내부망 주소 `http://10.116.64.13:8086`로 바꿈
 
+### 바뀜
+
+- 매일 DB 백업(pg-backup)을 인증서로 암호화(`.dump.p7m`)해서 올림. 학교 MinIO가 HTTP뿐이라서. trace-secrets에 `BACKUP_ENCRYPTION_CERT`가 필요함
+
 ### 고침
 
 - 학교 `MINIO_ENDPOINT`를 웹 콘솔 주소에서 S3 API 주소 `http://storage.java21.net:8000`으로 바꾸고, 폰용 사전 서명 URL 앞부분 `MINIO_PUBLIC_BASE=https://gakdo.site`를 더함

@@ -112,13 +112,28 @@ PR과 `main`·`develop` 푸시마다 "매니페스트 검증"이 비밀값 검�
 
 ## DB 백업과 복구
 
-- 매일 03:30(KST) `pg-backup` CronJob이 `trace`·`labelstudio` 두 DB를 `pg_dump -Fc`로 떠서 MinIO `trace-backups/postgres/<DB>-<날짜-시각>.dump`에 올리고, 7일 지난 백업은 지운다. 클러스터 디스크에는 남기지 않는다.
-- 지금 바로 백업: `kubectl -n trace create job --from=cronjob/pg-backup pg-backup-now`
-- 복구: MinIO에서 덤프를 받은 뒤 파드 안 `pg_restore`로 넣는다. 복구하는 동안 해당 앱은 잠시 내려 둔다.
+- 매일 03:30(KST) `pg-backup` CronJob이 `trace`·`labelstudio` 두 DB를 `pg_dump -Fc`로 뜨고, 인증서로 암호화해 MinIO `trace-backups/postgres/<DB>-<날짜-시각>.dump.p7m`에 올린다. 7일 지난 백업은 지운다. 클러스터 디스크에는 남기지 않는다.
+- 암호화하는 이유: 학교 MinIO S3 API가 HTTP뿐이라 오가는 덤프가 평문으로 보인다. 그래서 공개 키 인증서로 암호화(CMS, AES-256-GCM)해서 올리고, 풀 수 있는 개인 키는 클러스터 밖에만 둔다. 인증서가 없으면 백업은 평문으로 올리지 않고 실패한다.
+- 키 만들기(처음 한 번, 노트북에서):
   ```bash
-  mc cp <별칭>/trace-backups/postgres/trace-20261101-0330.dump .
-  kubectl -n trace exec -i postgres-0 -- pg_restore -U postgres -d trace --clean --if-exists < trace-20261101-0330.dump
+  openssl req -x509 -newkey rsa:3072 -nodes -days 3650 -subj "/CN=trace-backup" -keyout backup-key.pem -out backup-cert.pem
+  base64 -w0 backup-cert.pem   # 이 한 줄을 trace-secrets의 BACKUP_ENCRYPTION_CERT로 넣는다
   ```
+  `backup-key.pem`은 비밀번호 관리자 등 클러스터 밖 안전한 곳에 둔다. 잃어버리면 백업을 풀 수 없다.
+- 지금 바로 백업: `kubectl -n trace create job --from=cronjob/pg-backup pg-backup-now`
+- 복구: MinIO에서 받아 개인 키로 푼 뒤 파드 안 `pg_restore`로 넣는다. 앞 단계가 실패하면 멈추도록 `&&`로 잇고, 풀어 둔 평문은 끝나면 지운다. 복구하는 동안 해당 앱은 잠시 내려 둔다.
+  ```bash
+  (
+    f=trace-20261101-0330.dump
+    trap 'rm -f "$f"' EXIT
+    rm -f "$f" "$f.p7m" &&
+    mc cp <별칭>/trace-backups/postgres/$f.p7m . &&
+    sha256sum "$f.p7m" &&
+    openssl cms -decrypt -binary -inform DER -inkey backup-key.pem -in "$f.p7m" -out "$f" &&
+    kubectl -n trace exec -i postgres-0 -- pg_restore -U postgres -d trace --clean --if-exists < "$f"
+  )
+  ```
+- 파일이 바뀌었으면 푸는 단계(GCM 검증)에서 멈춘다. 다만 HTTP 구간에서는 예전의 정상 백업으로 바꿔치기할 수 있으니, 받은 파일의 `sha256sum`을 그 백업을 만든 잡 로그(`kubectl -n trace logs job/<잡 이름> -c encrypt`)의 해시와 비교한 뒤 복구한다.
 - PostgreSQL 데이터는 PVC `data-postgres-0`(10Gi), Label Studio 파일은 PVC `label-studio-data`(2Gi)에 남는다. 네임스페이스를 지우면 PVC도 지워지니 백업 뒤에 지운다.
 - 첫 기동 초기화가 중간에 실패하면(예: Secret 값이 비어 있음) 데이터 폴더만 만들어진 채 남아 다시 돌지 않는다. 데이터가 없을 때만 StatefulSet을 0으로 줄이고 PVC `data-postgres-0`을 지운 뒤 다시 띄운다.
 
