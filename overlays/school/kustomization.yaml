@@ -21,6 +21,7 @@ resources:
 - ../../base/apps/report-server
 - ../../base/apps/label-studio
 - ../../base/apps/cloudflared
+- ../../base/apps/grafana
 - ../../base/postgres
 - ../../base/network
 images:
