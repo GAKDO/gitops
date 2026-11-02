@@ -57,25 +57,35 @@ PR과 `main`·`develop` 푸시마다 "매니페스트 검증"이 비밀값 검�
    scripts/create-secrets.sh                                          # kubectl이 학교 클러스터를 가리키고 있어야 한다
    ```
    Rancher 화면(Storage → Secrets, 네임스페이스 `trace`)에서 같은 이름·키로 직접 만들어도 된다. 어느 키가 어느 Secret에 들어가는지는 `secret.env.example`에 있다.
-2. **GHCR 받기용 Secret** (패키지가 비공개일 때만): 앱 Deployment는 `ghcr-pull`을 참조한다. 패키지가 공개면 만들지 않아도 된다(경고만 남고 이미지는 받는다).
+2. **Cloudflare Tunnel** (`https://gakdo.site`): 밖에서는 이 주소 하나로 받는다. 클러스터 안 `cloudflared`(base/apps/cloudflared)가 Cloudflare로 나가는 연결만 맺으므로 들어오는 포트·인증서가 필요 없다.
+   1. gakdo.site의 네임서버를 Cloudflare로 옮긴다(가비아 → 네임서버 설정에 Cloudflare가 준 두 개).
+   2. Cloudflare Zero Trust → Networks → Tunnels → Create a tunnel(Cloudflared, 이름 `trace`) → 토큰을 복사한다.
+   3. Public hostname 두 개를 이 순서로 만든다(위가 먼저 맞음): `gakdo.site` 경로 `^/api/` → `HTTP` `gateway:8080`, `gakdo.site`(경로 없음) → `HTTP` `web:8080`.
+   4. 토큰을 Secret으로 넣는다(값은 레포·채팅에 남기지 않는다):
+      ```bash
+      read -rsp 'TUNNEL_TOKEN: ' T; echo
+      kubectl -n trace create secret generic trace-cloudflared --from-literal=TUNNEL_TOKEN="$T"; unset T
+      ```
+   Secret이 없으면 cloudflared 파드만 기다리고 나머지는 그대로 뜬다.
+3. **GHCR 받기용 Secret** (패키지가 비공개일 때만): 앱 Deployment는 `ghcr-pull`을 참조한다. 패키지가 공개면 만들지 않아도 된다(경고만 남고 이미지는 받는다).
    ```bash
    kubectl -n trace create secret docker-registry ghcr-pull \
      --docker-server=ghcr.io --docker-username=<GitHub 사용자> --docker-password=<read:packages 권한 토큰>
    ```
-3. **Argo CD에 등록**: 레포가 비공개면 Argo CD Settings → Repositories에 읽기 전용 토큰으로 이 레포를 먼저 등록한다.
+4. **Argo CD에 등록**: 레포가 비공개면 Argo CD Settings → Repositories에 읽기 전용 토큰으로 이 레포를 먼저 등록한다.
    ```bash
    kubectl apply -n argocd -f argocd/application.yaml   # 또는 Argo CD 화면에서 같은 값으로 만든다
    ```
-4. **확인**: Argo CD 화면에서 `trace`가 Synced·Healthy인지, `kubectl -n trace get pods`로 파드가 모두 Running인지 본다. 앱 이미지가 아직 GHCR에 없으면 그 앱만 ImagePullBackOff로 남는다(앱 레포가 처음 올리면 풀린다).
+5. **확인**: Argo CD 화면에서 `trace`가 Synced·Healthy인지, `kubectl -n trace get pods`로 파드가 모두 Running인지 본다. 앱 이미지가 아직 GHCR에 없으면 그 앱만 ImagePullBackOff로 남는다(앱 레포가 처음 올리면 풀린다).
 
 ## 밖으로 열린 포트
 
-학교 서버는 NodePort를 8300~8499에서 학생마다 10개씩 나눠 준다. A 계정 범위(8310~8319) 중 비어 있는 8314~8316을 쓰고, 8318은 지난 프로젝트가 쓰고 있다. 나머지는 예비다.
+학교 서버는 NodePort를 8300~8499에서 학생마다 10개씩 나눠 준다. A 계정 범위(8310~8319) 중 8316 하나만 쓰고, 8318은 지난 프로젝트가 쓰고 있다. 나머지는 예비다. gateway·web은 NodePort 없이 Cloudflare Tunnel로만 공개한다(학교망에 평문 HTTP 포트를 열지 않고, 요청 제한이 믿는 `CF-Connecting-IP` 헤더를 위조할 경로도 없앤다).
 
 | NodePort | 서비스 | 용도 |
 |---|---|---|
-| 8314 | gateway | API (부스·폰·관리 화면·진단 에이전트가 부름) |
-| 8315 | web | 웹 (리포트·3D 트윈·폰 촬영·관리 화면) |
+| 없음 | gateway | API. `https://gakdo.site/api/...`(터널). 클러스터 안에서 확인할 땐 `kubectl -n trace port-forward svc/gateway 8080:8080` |
+| 없음 | web | 웹. `https://gakdo.site`(터널) |
 | 8316 | label-studio | 학습 데이터 라벨링 |
 
 나머지 서버 5개와 postgres는 같은 네임스페이스 안에서만 닿는다(`base/network`). 클러스터 안 앱은 모두 8080으로 받고, 서로 `http://<서비스 이름>:8080`으로 부른다. 집 PC에서 DB가 필요하면 `kubectl -n trace port-forward svc/postgres 5432:5432`로 붙는다.

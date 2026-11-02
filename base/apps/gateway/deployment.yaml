@@ -1,5 +1,5 @@
 # gateway: 외부 API 입구. JWT 검증·라우팅·요청 제한 (Spring Cloud Gateway)
-# 밖으로는 overlays/school이 NodePort 8314로 연다.
+# 밖으로는 cloudflared(Cloudflare Tunnel)가 https://gakdo.site로 연다. NodePort는 없다.
 # 이미지 이름은 앱 이름 그대로 둔다. 실제 주소와 태그는 overlays/school의 images:가 넣는다(앱 레포가 kustomize edit set image로 바꿈).
 apiVersion: apps/v1
 kind: Deployment

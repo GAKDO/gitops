@@ -6,5 +6,17 @@ main에 버전이 적힌 CHANGELOG가 올라가면 release.yml이 태그와 GitH
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-02
+
+**목표: 첫 클러스터 배포와 https://gakdo.site 공개**
+auth-server 초기 계정 키를 받고, Cloudflare Tunnel(cloudflared 2개)로 web·gateway를 https://gakdo.site에 공개한다.
+
 ### 추가
 - 블로그(AIGJ-01-002-blog/devlog) CI/CD를 옮겨 초기 구성
+- auth-server 초기 관리자·부스 자격 키와 `WEB_PUBLIC_URL` 안내 (AU1) (#1)
+- Cloudflare Tunnel 커넥터(cloudflared)와 주소 값 `https://gakdo.site`, `TRACE_CLIENT_IP_HEADER` (#3)
+- 시연용 고객 계정 키 `DEMO_CUSTOMER_EMAIL`·`DEMO_CUSTOMER_PASSWORD` 예시 (#4)
+
+### 바꿈
+- gateway·web NodePort(8314·8315)를 닫고 터널로만 공개, NodePort는 label-studio 8316만 (#3)
+- web·gateway 직접 TLS(#2)는 터널 방식으로 바꾸며 되돌림 (#3)
