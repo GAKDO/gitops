@@ -1,5 +1,5 @@
-# 밖으로 여는 세 개(gateway·web·label-studio)만 어디서든 8080으로 받는다. NodePort(8314·8315·8316)로 들어온 요청이 여기로 온다.
-# 나머지 서버 5개와 postgres는 같은 네임스페이스 안에서만 닿는다.
+# 밖으로 여는 label-studio만 어디서든 8080으로 받는다. NodePort 8316으로 들어온 요청이 여기로 온다.
+# gateway·web은 같은 네임스페이스의 cloudflared(터널)만 부르므로 allow-same-namespace로 충분하다. 나머지 서버와 postgres도 같은 네임스페이스 안에서만 닿는다.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -7,7 +7,7 @@ metadata:
 spec:
   podSelector:
     matchExpressions:
-      - {key: app.kubernetes.io/name, operator: In, values: [gateway, web, label-studio]}
+      - {key: app.kubernetes.io/name, operator: In, values: [label-studio]}
   policyTypes: ["Ingress"]
   ingress:
     - ports:
