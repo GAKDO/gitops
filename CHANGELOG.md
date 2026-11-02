@@ -6,6 +6,10 @@ main에 버전이 적힌 CHANGELOG가 올라가면 release.yml이 태그와 GitH
 
 ## [Unreleased]
 
+### 고침
+
+- 학교 `MINIO_ENDPOINT`를 웹 콘솔 주소에서 S3 API 주소 `http://storage.java21.net:8000`으로 바꾸고, 폰용 사전 서명 URL 앞부분 `MINIO_PUBLIC_BASE=https://gakdo.site`를 더함
+
 ## [0.1.0] - 2026-11-02
 
 **목표: 첫 클러스터 배포와 https://gakdo.site 공개**
