@@ -23,6 +23,7 @@ gitops/
 │   ├── kustomization.yaml       네임스페이스·이미지 태그·NodePort
 │   ├── infra.env                비밀 아닌 접속 주소 → ConfigMap trace-infra
 │   └── secret.env.example       Secret 키 이름 목록 (값 없음). secret.env로 복사해 채운다 (커밋 금지)
+├── compose/                     로컬 Compose(G1): 노트북·학교 서버에서 쿠버네티스 없이 띄우기 (아래 "로컬 Compose")
 ├── argocd/application.yaml      Argo CD Application "trace" (처음 한 번 등록)
 ├── scripts/create-secrets.sh    secret.env → Secret trace-secrets·trace-postgres 만들기/바꾸기
 ├── scripts/check-no-secrets.sh  비밀값이 커밋됐는지 검사 (CI에서도 실행)
@@ -136,6 +137,32 @@ PR과 `main`·`develop` 푸시마다 "매니페스트 검증"이 비밀값 검�
 - 파일이 바뀌었으면 푸는 단계(GCM 검증)에서 멈춘다. 다만 HTTP 구간에서는 예전의 정상 백업으로 바꿔치기할 수 있으니, 받은 파일의 `sha256sum`을 그 백업을 만든 잡 로그(`kubectl -n trace logs job/<잡 이름> -c encrypt`)의 해시와 비교한 뒤 복구한다.
 - PostgreSQL 데이터는 PVC `data-postgres-0`(10Gi), Label Studio 파일은 PVC `label-studio-data`(2Gi)에 남는다. 네임스페이스를 지우면 PVC도 지워지니 백업 뒤에 지운다.
 - 첫 기동 초기화가 중간에 실패하면(예: Secret 값이 비어 있음) 데이터 폴더만 만들어진 채 남아 다시 돌지 않는다. 데이터가 없을 때만 StatefulSet을 0으로 줄이고 PVC `data-postgres-0`을 지운 뒤 다시 띄운다.
+
+## 로컬 Compose (G1)
+
+학교 클러스터 없이 서버 6개 + web + PostgreSQL·RabbitMQ·Redis·MinIO를 `docker compose` 하나로 띄운다(NFR-06). 노트북과 학교 서버(10.116.64.12:8315, 강사님 nginx가 `https://trace.java21.net`으로 넘김) 둘 다 같은 파일이다. 앱 이미지(GHCR)와 환경 변수 이름은 클러스터와 같다.
+
+```bash
+cd compose
+cp .env.example .env        # PUBLIC_BASE_URL과 비밀값을 채운다 (커밋 금지)
+docker login ghcr.io        # GHCR 패키지가 비공개면 read:packages 토큰으로 한 번
+docker compose up -d
+docker compose ps           # minio-init은 버킷을 만들고 Exited (0)이면 정상
+```
+
+| 경로 (web nginx가 입구) | 가는 곳 |
+|---|---|
+| `/` | 화면 |
+| `/api/` | gateway → 서버 5개 |
+| `/trace-captures/`·`/trace-derived/` | MinIO (사전 서명 URL, capture-server가 앞부분을 `PUBLIC_BASE_URL`로 바꿔 줌) |
+
+- **공개 주소**: `.env`의 `PUBLIC_BASE_URL` 하나가 `WEB_PUBLIC_URL`(QR 링크)·`TRACE_WEB_ORIGIN`(CORS)·`MINIO_PUBLIC_BASE`(사진 URL)가 된다. 폰 카메라는 HTTPS에서만 되므로 폰 수령 촬영은 `https://` 주소(학교 서버의 강사님 nginx, 또는 `compose/tls/`에 `tls.crt`·`tls.key`)로 연다.
+- **이미지 태그**: 기본 `develop`(develop 푸시마다 갱신). `TRACE_TAG=latest`면 main 릴리스, 앱 하나만 바꾸려면 `CAPTURE_SERVER_TAG=<커밋 SHA>`처럼. 바꾼 뒤 `docker compose pull && docker compose up -d`.
+- **자동 재시작**: 모든 서비스가 `restart: unless-stopped`라 앱이 죽으면 다시 뜬다(`docker compose kill capture-server` 뒤에도 다시 뜸. `stop`은 손으로 멈춘 것으로 본다).
+- **집 PC 워커**: RabbitMQ(5672)·MinIO(9000)는 기본으로 이 기기(127.0.0.1)에서만 열린다. 같은 망의 워커가 붙어야 하면 `INFRA_BIND=0.0.0.0`.
+- **초기화**: DB 계정·스키마는 postgres 볼륨이 비어 있을 때 `compose/init-db.sh`가 한 번 만든다. 처음부터 다시 하려면 `docker compose down -v`(데이터가 모두 사라진다).
+- **Apple Silicon**: GHCR 이미지가 amd64뿐이라 에뮬레이션으로 돈다(Docker Desktop의 Rosetta 사용 권장). 처음 기동이 몇 분 걸릴 수 있다.
+- InfluxDB(파일럿 추이)는 들어 있지 않다. 학교 InfluxDB는 내부망 전용이라 학교 서버에서 띄울 때만 `infra.env`의 `INFLUX_URL`을 채운다.
 
 ## 로컬에서 검증
 

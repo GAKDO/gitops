@@ -1,0 +1,3 @@
+# tls.crt·tls.key를 여기 두면 web이 HTTPS로 연다. 인증서·키는 커밋하지 않는다
+*
+!.gitignore
