@@ -9,6 +9,7 @@ main에 버전이 적힌 CHANGELOG가 올라가면 release.yml이 태그와 GitH
 ### 추가
 
 - 로컬 Compose(G1, `compose/`): 서버 6개 + web + PostgreSQL·RabbitMQ·Redis·MinIO를 `docker compose up` 한 번으로 띄움. 입구는 web nginx 하나(`/api/` → gateway, `/trace-captures/`·`/trace-derived/` → MinIO), 공개 주소는 `.env`의 `PUBLIC_BASE_URL`, 이미지는 GHCR 태그(기본 `develop`). 매니페스트 검증에 `docker compose config` 확인을 더함
+- 로컬 Compose report-server(RP1): `CHAIN_SIGNING_KEY`를 필수로 바꾸고(비면 `compose config`에서 막힘), 봉인 사진 재확인용 `MINIO_ACCESS_KEY`·`MINIO_SECRET_KEY`를 넘김
 - 파일럿 추이 Grafana(`base/apps/grafana`, NFR-05 예외): grafana-oss 12.1.1, provisioning은 web `grafana/` 복사본, 공개 주소 `https://gakdo.site/grafana/`. trace-secrets에 `GRAFANA_ADMIN_PASSWORD`·`INFLUX_READ_TOKEN`, infra.env에 `INFLUX_ORG` 자리 추가, `INFLUX_URL`은 내부망 주소 `http://10.116.64.13:8086`로 바꿈
 
 ### 바뀜
