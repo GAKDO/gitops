@@ -26,7 +26,7 @@ resources:
 images:
 - name: auth-server
   newName: ghcr.io/gakdo/auth-server
-  newTag: latest
+  newTag: 3bdfcf8bbcdca0c0956fa527e1cfe72937c6c41f
 - name: capture-server
   newName: ghcr.io/gakdo/capture-server
   newTag: latest
@@ -35,7 +35,7 @@ images:
   newTag: latest
 - name: gateway
   newName: ghcr.io/gakdo/gateway
-  newTag: latest
+  newTag: 4d6d9b318f0c1541d084adccfa4420ab39c09f23
 - name: rental-server
   newName: ghcr.io/gakdo/rental-server
   newTag: latest
