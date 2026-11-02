@@ -20,6 +20,7 @@ resources:
 - ../../base/apps/diagnostics-server
 - ../../base/apps/report-server
 - ../../base/apps/label-studio
+- ../../base/apps/cloudflared
 - ../../base/postgres
 - ../../base/network
 images:
