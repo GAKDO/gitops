@@ -80,12 +80,12 @@ PR과 `main`·`develop` 푸시마다 "매니페스트 검증"이 비밀값 검�
 
 ## 밖으로 열린 포트
 
-학교 서버는 NodePort를 8300~8499에서 학생마다 10개씩 나눠 준다. A 계정 범위(8310~8319) 중 비어 있는 8314~8316을 쓰고, 8318은 지난 프로젝트가 쓰고 있다. 나머지는 예비다.
+학교 서버는 NodePort를 8300~8499에서 학생마다 10개씩 나눠 준다. A 계정 범위(8310~8319) 중 8316 하나만 쓰고, 8318은 지난 프로젝트가 쓰고 있다. 나머지는 예비다. gateway·web은 NodePort 없이 Cloudflare Tunnel로만 공개한다(학교망에 평문 HTTP 포트를 열지 않고, 요청 제한이 믿는 `CF-Connecting-IP` 헤더를 위조할 경로도 없앤다).
 
 | NodePort | 서비스 | 용도 |
 |---|---|---|
-| 8314 | gateway | API. 밖에서는 `https://gakdo.site/api/...`(터널). 이 포트는 학교망 직접 확인용 |
-| 8315 | web | 웹. 밖에서는 `https://gakdo.site`(터널). 이 포트는 학교망 직접 확인용 |
+| 없음 | gateway | API. `https://gakdo.site/api/...`(터널). 클러스터 안에서 확인할 땐 `kubectl -n trace port-forward svc/gateway 8080:8080` |
+| 없음 | web | 웹. `https://gakdo.site`(터널) |
 | 8316 | label-studio | 학습 데이터 라벨링 |
 
 나머지 서버 5개와 postgres는 같은 네임스페이스 안에서만 닿는다(`base/network`). 클러스터 안 앱은 모두 8080으로 받고, 서로 `http://<서비스 이름>:8080`으로 부른다. 집 PC에서 DB가 필요하면 `kubectl -n trace port-forward svc/postgres 5432:5432`로 붙는다.
