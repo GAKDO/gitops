@@ -1,6 +1,8 @@
 # PostgreSQL은 클러스터 안 한 대뿐이라 이중화 대신 매일 백업한다.
 # 매일 03:30(KST) trace·labelstudio 두 DB를 pg_dump(custom 형식)로 떠서 학교 MinIO 버킷 trace-backups의 postgres/ 아래에 올리고,
 # 7일 지난 백업은 지운다. 클러스터 디스크에는 남기지 않는다. 복구: README "DB 백업과 복구".
+# 학교 MinIO S3 API는 HTTP뿐이라 덤프를 올리기 전에 공개 키 인증서로 암호화한다(CMS, AES-256-GCM, 11/2 A 결정).
+# 클러스터에는 인증서(공개 키)만 두고, 풀 수 있는 개인 키는 클러스터 밖에만 둔다.
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -10,7 +12,7 @@ spec:
   schedule: "30 3 * * *"
   timeZone: Asia/Seoul
   concurrencyPolicy: Forbid
-  successfulJobsHistoryLimit: 3
+  successfulJobsHistoryLimit: 7  # 보관 7일과 맞춰 잡 로그의 해시를 복구 때 비교할 수 있게
   failedJobsHistoryLimit: 3
   jobTemplate:
     spec:
@@ -58,7 +60,37 @@ spec:
                 capabilities: {drop: ["ALL"]}
               volumeMounts:
                 - {name: backup, mountPath: /backup}
-          # 2) 덤프를 MinIO에 올리고 7일 지난 백업을 지운다. 버킷 trace-backups는 학교에서 받은 것을 쓴다(만들지 않음)
+          # 2) 덤프를 하나씩 암호화(.dump.p7m)하고 평문 덤프는 바로 지운다. 인증서가 없으면 평문으로 올리지 않고 실패한다
+            - name: encrypt
+              image: alpine/openssl:3.5.9
+              command: ["sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  [ -n "${BACKUP_ENCRYPTION_CERT:-}" ] || { echo "trace-secrets에 BACKUP_ENCRYPTION_CERT가 없습니다"; exit 1; }
+                  printf '%s' "$BACKUP_ENCRYPTION_CERT" | base64 -d > /tmp/backup-cert.pem
+                  for f in /backup/*.dump; do
+                    openssl cms -encrypt -binary -aes-256-gcm -stream -outform DER -in "$f" -out "$f.p7m" /tmp/backup-cert.pem
+                    [ -s "$f.p7m" ] || { echo "암호화 실패: $f"; exit 1; }
+                    rm -f "$f"
+                  done
+                  # 복구할 때 받은 파일이 이 백업과 같은지 비교할 해시(잡 로그에 남는다)
+                  sha256sum /backup/*.dump.p7m
+                  ls -lh /backup
+              env:
+                - name: BACKUP_ENCRYPTION_CERT
+                  valueFrom: {secretKeyRef: {name: trace-secrets, key: BACKUP_ENCRYPTION_CERT}}
+              resources:
+                requests: {cpu: 50m, memory: 32Mi}
+                limits: {memory: 128Mi}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: {drop: ["ALL"]}
+              volumeMounts:
+                - {name: backup, mountPath: /backup}
+                - {name: tmp, mountPath: /tmp}
+          # 3) 암호화한 덤프를 MinIO에 올리고 7일 지난 백업을 지운다. 버킷 trace-backups는 학교에서 받은 것을 쓴다(만들지 않음)
           containers:
             - name: upload
               image: pgsty/mc:RELEASE.2026-09-16T00-00-00Z
@@ -69,7 +101,7 @@ spec:
                   export MC_CONFIG_DIR=/tmp/mc
                   mc alias set s3 "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY" >/dev/null
                   mc ls "s3/$BACKUP_BUCKET" >/dev/null || { echo "버킷 $BACKUP_BUCKET 에 접근할 수 없습니다"; exit 1; }
-                  mc cp /backup/*.dump "s3/$BACKUP_BUCKET/postgres/"
+                  mc cp /backup/*.dump.p7m "s3/$BACKUP_BUCKET/postgres/"
                   mc rm --recursive --force --older-than 7d "s3/$BACKUP_BUCKET/postgres/"
                   mc ls "s3/$BACKUP_BUCKET/postgres/"
               env:
@@ -92,6 +124,6 @@ spec:
                 - {name: tmp, mountPath: /tmp}
           volumes:
             - name: backup
-              emptyDir: {sizeLimit: 2Gi}
+              emptyDir: {sizeLimit: 4Gi}  # 암호화하는 동안 평문과 암호문이 잠시 같이 있다
             - name: tmp
               emptyDir: {sizeLimit: 64Mi}
