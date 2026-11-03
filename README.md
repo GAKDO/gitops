@@ -140,7 +140,7 @@ PR과 `main`·`develop` 푸시마다 "매니페스트 검증"이 비밀값 검�
 
 ## 로컬 Compose (G1)
 
-학교 클러스터 없이 서버 6개 + web + PostgreSQL·RabbitMQ·Redis·MinIO를 `docker compose` 하나로 띄운다(NFR-06). 노트북과 학교 서버(10.116.64.12:8315, 강사님 nginx가 `https://trace.java21.net`으로 넘김) 둘 다 같은 파일이다. 앱 이미지(GHCR)와 환경 변수 이름은 클러스터와 같다.
+학교 클러스터 없이 서버 6개 + web + PostgreSQL·RabbitMQ·Redis·MinIO를 `docker compose` 하나로 띄운다(NFR-06). 노트북과 학교 서버(10.116.64.12:8315, `https://gakdo.site` → 강사님 nginx → 8315) 둘 다 같은 파일이다. 앱 이미지(GHCR)와 환경 변수 이름은 클러스터와 같다.
 
 ```bash
 cd compose
