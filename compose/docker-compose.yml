@@ -1,6 +1,6 @@
 # TRACE 로컬 Compose (G1, NFR-06): web(nginx) + 서버 + PostgreSQL·RabbitMQ·Redis·MinIO를 한 번에 띄운다.
 # 11/3 MVP 재조정: 기본은 MVP 앱 5개(web·gateway·auth·rental·capture)만. 진단·리포트까지 띄우려면 --profile full
-# 노트북과 학교 서버(10.116.64.12:8315 → trace.java21.net) 둘 다에서 같은 파일로 뜬다. 쿠버네티스·Cloudflare는 쓰지 않는다.
+# 노트북과 학교 서버(https://gakdo.site → 강사님 nginx → 10.116.64.12:8315) 둘 다에서 같은 파일로 뜬다. 쿠버네티스·Cloudflare 터널은 쓰지 않는다(Cloudflare는 DNS만).
 #
 #   cd compose && cp .env.example .env   # 값 채우기 (커밋 금지)
 #   docker login ghcr.io                 # GHCR 패키지가 비공개면 read:packages 토큰으로 한 번
