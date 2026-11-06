@@ -78,6 +78,8 @@ services:
       <<: [*app-env, *server-secrets]
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
+      # 성능 그래프의 모델별 mAP(학습 뒤 채움, 예: yolo11s-seg-v001-trt-fp16=0.71/0.48). 비우면 빈 목록
+      MODEL_METRICS: ${MODEL_METRICS:-}
   # 11/6 재도입: 에이전트 페어링·진단 업로드 시연(DI1·AG1). Influx 없이 뜬다(INFLUX_TOKEN은 비워도 됨)
   diagnostics-server:
     <<: *app
