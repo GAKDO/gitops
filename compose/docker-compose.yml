@@ -1,11 +1,12 @@
 # TRACE 로컬 Compose (G1, NFR-06): web(nginx) + 서버 + PostgreSQL·RabbitMQ·Redis·MinIO를 한 번에 띄운다.
-# 11/3 MVP 재조정: 기본은 MVP 앱 5개(web·gateway·auth·rental·capture)만. 진단·리포트까지 띄우려면 --profile full
+# 11/3 MVP 재조정: 기본은 MVP 앱 5개(web·gateway·auth·rental·capture). 11/6 진단 페어링 시연을 위해 diagnostics-server도 기본에 넣었다(6개).
+# 리포트까지 띄우려면 --profile full
 # 노트북과 학교 서버(https://gakdo.site → 강사님 nginx → 10.116.64.12:8315) 둘 다에서 같은 파일로 뜬다. 쿠버네티스·Cloudflare 터널은 쓰지 않는다(Cloudflare는 DNS만).
 #
 #   cd compose && cp .env.example .env   # 값 채우기 (커밋 금지)
 #   docker login ghcr.io                 # GHCR 패키지가 비공개면 read:packages 토큰으로 한 번
-#   docker compose up -d                  # MVP(부스 검사): web·gateway·auth·rental·capture + 인프라
-#   docker compose --profile full up -d   # 전체: + diagnostics-server·report-server
+#   docker compose up -d                  # 기본: web·gateway·auth·rental·capture·diagnostics + 인프라
+#   docker compose --profile full up -d   # 전체: + report-server
 #
 # 입구는 web nginx 하나다(WEB_PORT, 기본 8315): / 화면, /api/ → gateway, /trace-captures/·/trace-derived/ → MinIO.
 # 앱 이미지·환경 변수 이름은 클러스터(overlays/school)와 같다. 접속 주소는 infra.env, 비밀은 .env에서 받는다.
@@ -77,14 +78,14 @@ services:
       <<: [*app-env, *server-secrets]
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
-  # 11/3 MVP 재조정: 진단·리포트는 보관(3·2단계). `docker compose --profile full up -d`일 때만 뜬다
+  # 11/6 재도입: 에이전트 페어링·진단 업로드 시연(DI1·AG1). Influx 없이 뜬다(INFLUX_TOKEN은 비워도 됨)
   diagnostics-server:
     <<: *app
-    profiles: ["full"]
     image: ghcr.io/gakdo/diagnostics-server:${DIAGNOSTICS_SERVER_TAG:-${TRACE_TAG:-develop}}
     environment:
       <<: [*app-env, *server-secrets]
       INFLUX_TOKEN: ${INFLUX_TOKEN:-}
+  # 11/3 MVP 재조정: 리포트는 보관(2단계). `docker compose --profile full up -d`일 때만 뜬다
   report-server:
     <<: *app
     profiles: ["full"]
