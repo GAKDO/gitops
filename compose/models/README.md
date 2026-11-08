@@ -6,6 +6,7 @@
 | --- | --- |
 | `best.onnx` | 집 PC 학습 결과의 ONNX(`trace-ml train`이 만든 것, 부스 Jetson 엔진을 만든 것과 같은 파일) |
 | `model.json` | 같은 폴더의 모델 정보(`modelVersion`·`classes`). 클래스가 codes.yaml과 다르면 워커가 시작하지 않습니다 |
+| `superpoint.onnx`·`lightglue.onnx` | (선택) `.env`에 `TRACE_ALIGN=features`일 때 정합 보정에 씁니다. 없으면 ORB로 보정하고, 보정이 나쁘면 윤곽 결과를 그대로 둡니다. `.env`를 바꾼 뒤에는 `restart`가 아니라 `docker compose up -d inspect-worker`로 다시 만듭니다 |
 
 ## 모델 바꾸기
 

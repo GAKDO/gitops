@@ -125,6 +125,9 @@ services:
       TRACE_DETECT_CONF: ${TRACE_DETECT_CONF:-0.25}
       TRACE_DETECT_THREADS: ${TRACE_DETECT_THREADS:-2}
       TRACE_DEVICE_MODEL: ${TRACE_DEVICE_MODEL:-MBA13-M2}
+      # 정합 방식: contour(윤곽, 기본) | features(같은 렌탈 첫 시점 사진에 특징점으로 다시 맞춤. models/에
+      # superpoint.onnx·lightglue.onnx가 있으면 LightGlue, 없으면 ORB, 결과가 나쁘면 윤곽 그대로)
+      TRACE_ALIGN: ${TRACE_ALIGN:-contour}
     volumes:
       - ./models:/models:ro
     mem_limit: 2g
