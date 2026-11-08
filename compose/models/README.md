@@ -16,7 +16,7 @@ docker compose restart inspect-worker
 docker compose logs --tail 20 inspect-worker   # "폰 탐지 모델 <modelVersion>"이 보이면 끝
 ```
 
-부스(Jetson)도 같은 `best.onnx`로 `trace-booth build-engine`을 다시 하면 두 곳의 모델이 같아집니다. 성능 화면의 mAP는 `.env`의 `MODEL_METRICS`(capture-server)에 새 `modelVersion`으로 더합니다.
+부스(Jetson)도 같은 `best.onnx`로 `trace-booth build-engine`을 다시 하면 두 곳의 모델이 같아집니다. 성능 화면의 mAP는 `.env`의 `MODEL_METRICS`(capture-server)에 새 `modelVersion`으로 더한 뒤 `docker compose up -d capture-server`로 다시 만듭니다(restart만으로는 바뀐 `.env`를 읽지 않습니다).
 
 폴더가 비어 있으면 워커는 탐지만 건너뛰고 정합·3D 텍스처는 계속합니다(결과의 modelVersion이 `contour-v1`).
 

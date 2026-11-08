@@ -96,6 +96,7 @@ services:
     environment:
       <<: [*app-env, *server-secrets]
       # 해시 체인 서명 키(Ed25519). 비면 report-server가 뜨지 않는다(init-env.sh가 빈 값만 채운다)
+      # 이미 쓰던 설치를 올릴 때도 `up -d` 전에 ./init-env.sh를 한 번 돌린다. 값이 있으면 그대로 두고 빈 값만 채운다
       # (만들기: openssl genpkey -algorithm ed25519 | base64 | tr -d '\n'). 한 번 정하면 바꾸지 않는다
       CHAIN_SIGNING_KEY: ${CHAIN_SIGNING_KEY:-}
       # 검증할 때 봉인한 사진이 MinIO에서 바뀌지 않았는지 다시 본다
