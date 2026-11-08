@@ -1,12 +1,14 @@
 # TRACE 로컬 Compose (G1, NFR-06): web(nginx) + 서버 + PostgreSQL·RabbitMQ·Redis·MinIO를 한 번에 띄운다.
 # 11/3 MVP 재조정: 기본은 MVP 앱 5개(web·gateway·auth·rental·capture). 11/6 진단 페어링 시연을 위해 diagnostics-server도 기본에 넣었다(6개).
-# 리포트까지 띄우려면 --profile full
+# 11/8: 리포트(report-server)와 폰 사진 검사 워커(inspect-worker)도 기본으로 뜬다(앱 8개). 출고·수령·반납 세 시점을 이 파일 하나로 시연한다.
 # 노트북과 학교 서버(https://gakdo.site → 강사님 nginx → 10.116.64.12:8315) 둘 다에서 같은 파일로 뜬다. 쿠버네티스·Cloudflare 터널은 쓰지 않는다(Cloudflare는 DNS만).
 #
 #   cd compose && cp .env.example .env   # 값 채우기 (커밋 금지)
 #   docker login ghcr.io                 # GHCR 패키지가 비공개면 read:packages 토큰으로 한 번
-#   docker compose up -d                  # 기본: web·gateway·auth·rental·capture·diagnostics + 인프라
-#   docker compose --profile full up -d   # 전체: + report-server
+#   docker compose up -d                  # web·gateway·auth·rental·capture·diagnostics·report·inspect-worker + 인프라
+#
+# 탐지 모델 바꾸기(폰 사진): models/ 폴더에 best.onnx·model.json(부스 Jetson과 같은 파일)을 넣고
+#   docker compose restart inspect-worker   # 로그에 '폰 탐지 모델 <버전>'이 보이면 끝. 폴더가 비면 정합·3D만 하고 탐지는 건너뛴다
 #
 # 입구는 web nginx 하나다(WEB_PORT, 기본 8315): / 화면, /api/ → gateway, /trace-captures/·/trace-derived/ → MinIO.
 # 앱 이미지·환경 변수 이름은 클러스터(overlays/school)와 같다. 접속 주소는 infra.env, 비밀은 .env에서 받는다.
@@ -87,19 +89,53 @@ services:
     environment:
       <<: [*app-env, *server-secrets]
       INFLUX_TOKEN: ${INFLUX_TOKEN:-}
-  # 11/3 MVP 재조정: 리포트는 보관(2단계). `docker compose --profile full up -d`일 때만 뜬다
+  # 타임라인·해시 체인 봉인·검증·진행률(SSE). 11/4부터 학교 서버에서 켜 두었고 11/8 기본 기동에 넣었다
   report-server:
     <<: *app
-    profiles: ["full"]
     image: ghcr.io/gakdo/report-server:${REPORT_SERVER_TAG:-${TRACE_TAG:-develop}}
     environment:
       <<: [*app-env, *server-secrets]
-      # 해시 체인 서명 키(Ed25519). full 프로필에서만 필요하다. 비면 report-server가 뜨지 않는다
-      # (만들기: openssl genpkey -algorithm ed25519 | base64 | tr -d '\n'). MVP 기본 기동은 이 값 없이 된다
+      # 해시 체인 서명 키(Ed25519). 비면 report-server가 뜨지 않는다(init-env.sh가 빈 값만 채운다)
+      # 이미 쓰던 설치를 올릴 때도 `up -d` 전에 ./init-env.sh를 한 번 돌린다. 값이 있으면 그대로 두고 빈 값만 채운다
+      # (만들기: openssl genpkey -algorithm ed25519 | base64 | tr -d '\n'). 한 번 정하면 바꾸지 않는다
       CHAIN_SIGNING_KEY: ${CHAIN_SIGNING_KEY:-}
       # 검증할 때 봉인한 사진이 MinIO에서 바뀌지 않았는지 다시 본다
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
+      # inspect-worker의 면별 정합 진행(Redis)을 화면 진행률 40%(ALIGNED)로 보낸다
+      REPORT_PROGRESS_REDIS_ENABLED: "true"
+
+  # 폰 사진 정합(9면 표준 좌표)·흠집 탐지(best.onnx, CPU)·3D 텍스처(ML2). trace.capture.uploaded를 받아
+  # trace.inspect.completed를 낸다. 부스 세트는 탐지 없이 정합·텍스처만 한다(부스 탐지는 Jetson이 이미 보냄).
+  # 꺼져 있던 동안 쌓인 세트는 켜지면 처리한다(durable 큐). 진행률은 Redis trace:progress:{rentalId}
+  inspect-worker:
+    platform: linux/amd64
+    image: ghcr.io/gakdo/inspect-worker:${INSPECT_WORKER_TAG:-${TRACE_TAG:-develop}}
+    restart: unless-stopped
+    env_file:
+      - infra.env
+    environment:
+      RABBITMQ_USERNAME: ${RABBITMQ_USERNAME}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      TRACE_MODEL_DIR: /models
+      # 폰 사진 탐지 문턱(부스와 같은 0.25 권장). 이벤트에 기종이 없을 때 쓰는 기본 기종
+      TRACE_DETECT_CONF: ${TRACE_DETECT_CONF:-0.25}
+      TRACE_DETECT_THREADS: ${TRACE_DETECT_THREADS:-2}
+      TRACE_DEVICE_MODEL: ${TRACE_DEVICE_MODEL:-MBA13-M2}
+    volumes:
+      - ./models:/models:ro
+    mem_limit: 2g
+    cpus: ${INSPECT_WORKER_CPUS:-2}
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
 
   web:
     platform: linux/amd64
