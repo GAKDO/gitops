@@ -147,6 +147,9 @@ services:
     environment:
       API_UPSTREAM: gateway:8080
       MINIO_UPSTREAM: minio:9000
+      # 앞단 프록시(학교 서버는 강사님 nginx)의 IP·CIDR(쉼표). 그 연결의 X-Forwarded-For로 실제 사용자 IP를 정해
+      # gateway 요청 제한(로그인·페어링 분당 10회)을 사람마다 센다. 비우면 모든 사용자가 프록시 IP 하나로 세진다
+      TRUSTED_PROXIES: ${WEB_TRUSTED_PROXIES:-}
     ports:
       - "${WEB_BIND:-0.0.0.0}:${WEB_PORT:-8315}:8080"
     # tls/에 tls.crt·tls.key가 있으면 HTTPS로 연다(폰 카메라는 HTTPS 필요). 앞에 TLS 프록시가 있으면 비워 둔다
