@@ -175,18 +175,23 @@ cd ~/gitops && git pull
 mkdir -p ~/trace-backups ~/.config
 echo 'TRACE_ALERT_WEBHOOK_URL=<웹훅 주소>' > ~/.config/trace-ops.env && chmod 600 ~/.config/trace-ops.env
 bash compose/ops/backup.sh      # 한 번 손으로 돌려 크기·남은 디스크 확인
-crontab -e                      # 아래 두 줄 추가
-# 30 3 * * * bash $HOME/gitops/compose/ops/backup.sh >> $HOME/trace-backups/backup.log 2>&1
-# */2 * * * * bash $HOME/gitops/compose/ops/health.sh >> $HOME/trace-backups/health.log 2>&1
+crontab -e                      # 아래 두 줄을 그대로 붙여 넣기
+```
+
+```cron
+30 3 * * * bash $HOME/gitops/compose/ops/backup.sh >> $HOME/trace-backups/backup.log 2>&1
+*/2 * * * * bash $HOME/gitops/compose/ops/health.sh >> $HOME/trace-backups/health.log 2>&1
 ```
 
 | 스크립트 | 하는 일 |
 | --- | --- |
-| `ops/backup.sh` | `pg_dumpall` → `~/trace-backups/db/trace-<시각>.sql.gz`(14일 보관), MinIO 데이터 볼륨 → `~/trace-backups/minio/minio-<시각>.tar.gz`(3일 보관). 서비스는 멈추지 않는다. 실패하면 알림 |
-| `ops/health.sh` | 2분마다 서비스가 멈추거나 unhealthy인지, 웹 → gateway(`/api/v1/gateway/ping`)가 응답하는지 본다. 상태가 바뀔 때만 "장애"·"복구"를 한 번씩 알린다 |
+| `ops/backup.sh` | `pg_dumpall` → `~/trace-backups/db/trace-<시각>.sql.gz`(14일 보관), MinIO 데이터 볼륨 → `~/trace-backups/minio/minio-<시각>.tar.gz`(3일 보관). MinIO는 묶는 동안만 잠깐 일시 정지(pause)해 한 시점의 파일만 담는다. 실패하면 알림 |
+| `ops/health.sh` | 2분마다 서비스가 멈추거나 unhealthy인지, 웹 → gateway(`/api/v1/gateway/ping`)가 응답하는지 본다. 정상→장애, 장애→정상으로 바뀔 때만 한 번씩 알린다(알림 전송이 실패하면 다음 점검에 다시 보냄) |
 
 - 백업은 같은 서버 디스크에 남으므로 서버 자체가 망가지는 경우까지 막으려면 가끔 집 PC로 내려받는다: `scp -P 8822 AIGJ_01_002@s2.java21.net:trace-backups/db/<파일> .`
-- DB 복구: `gunzip -c ~/trace-backups/db/<파일>.sql.gz | docker compose exec -T postgres psql -U postgres` (앱을 먼저 `docker compose stop`, 끝나면 `up -d`). MinIO 복구: `docker compose stop minio` 뒤 `docker run --rm --volumes-from $(docker compose ps -q minio) -v ~/trace-backups/minio:/b alpine:3.20 sh -c 'rm -rf /data/* && tar xzf /b/<파일> -C /'` 후 `docker compose start minio`.
+- 복구 명령은 모두 학교 서버의 `~/gitops/compose`에서 친다(`cd ~/gitops/compose`).
+- DB 복구: 앱만 멈추고 postgres는 켜 둔다. `docker compose stop $(docker compose config --services | grep -vxE 'postgres|minio|minio-init|rabbitmq|redis')` → `gunzip -c ~/trace-backups/db/<파일>.sql.gz | docker compose exec -T postgres psql -U postgres` → `docker compose up -d`
+- MinIO 복구: `docker compose stop minio` → `docker run --rm --volumes-from $(docker compose ps -a -q minio) -v ~/trace-backups/minio:/b alpine:3.20 sh -c 'rm -rf /data/* && tar xzf /b/<파일> -C /'` → `docker compose start minio`
 - 보관 일수·위치는 `TRACE_BACKUP_KEEP_DB`·`TRACE_BACKUP_KEEP_MINIO`·`TRACE_BACKUP_DIR`로 바꾼다.
 
 ## 로컬에서 검증

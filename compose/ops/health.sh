@@ -11,8 +11,11 @@ mkdir -p "$(dirname "$STATE")"
 cd "$COMPOSE" || exit 1
 
 # 계속 돌아야 하는 서비스(minio-init처럼 한 번 돌고 끝나는 것은 뺀다)
-SERVICES="$(docker compose config --services | grep -vx 'minio-init')"
-RUNNING="$(docker compose ps --status running --services 2>/dev/null)"
+# 조회 자체가 실패하면(도커 데몬 문제 등) 서비스 상태와 섞지 않고 상태 파일도 그대로 둔다
+ALL="$(docker compose config --services)" || { echo "$(date -u +%FT%TZ) compose config 조회 실패"; exit 1; }
+SERVICES="$(grep -vx 'minio-init' <<<"$ALL")"
+[ -n "$SERVICES" ] || { echo "$(date -u +%FT%TZ) 서비스 목록이 비어 있음"; exit 1; }
+RUNNING="$(docker compose ps --status running --services)" || { echo "$(date -u +%FT%TZ) compose ps 조회 실패"; exit 1; }
 BAD=""
 for s in $SERVICES; do
   if ! grep -qx "$s" <<<"$RUNNING"; then BAD="$BAD $s(멈춤)"; continue; fi
@@ -29,10 +32,15 @@ ping_ok() {
 }
 ping_ok || BAD="$BAD 웹→gateway(응답없음)"
 
+# 알림은 "정상 → 장애"와 "장애 → 정상" 두 전이에서만. 장애 목록만 바뀌면 기록만 갱신한다.
+# 알림 전송이 실패하면 상태를 저장하지 않아 다음 점검(2분 뒤)에 다시 보낸다
 NOW="${BAD# }"; PREV="$(cat "$STATE" 2>/dev/null || true)"
-if [ "$NOW" != "$PREV" ]; then
-  if [ -n "$NOW" ]; then trace_notify "장애: $NOW · 확인: cd $COMPOSE && docker compose ps"
-  else trace_notify "복구: 모든 서비스 정상"; fi
-  printf '%s' "$NOW" > "$STATE"
+save() { printf '%s' "$NOW" > "$STATE"; }
+if [ -n "$NOW" ] && [ -z "$PREV" ]; then
+  trace_notify "장애: $NOW · 확인: cd $COMPOSE && docker compose ps" && save
+elif [ -z "$NOW" ] && [ -n "$PREV" ]; then
+  trace_notify "복구: 모든 서비스 정상(직전 장애: $PREV)" && save
+elif [ "$NOW" != "$PREV" ]; then
+  save
 fi
 echo "$(date -u +%FT%TZ) ${NOW:-정상}"
