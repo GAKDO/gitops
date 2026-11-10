@@ -165,6 +165,30 @@ docker compose ps           # minio-init은 버킷을 만들고 Exited (0)이면
 - **Apple Silicon**: GHCR 이미지가 amd64뿐이라 에뮬레이션으로 돈다(Docker Desktop의 Rosetta 사용 권장). 처음 기동이 몇 분 걸릴 수 있다.
 - InfluxDB(파일럿 추이)는 들어 있지 않다. 학교 InfluxDB는 내부망 전용이라 학교 서버에서 띄울 때만 `infra.env`의 `INFLUX_URL`을 채운다.
 
+### Compose 운영 자동화 (학교 서버: 야간 백업·장애 알림)
+
+쿠버네티스 `pg-backup` 대신 Compose에서도 사람이 지켜보지 않아도 되게 cron 두 줄을 둔다. 알림은 `~/.config/trace-ops.env`의 `TRACE_ALERT_WEBHOOK_URL`(Discord·Slack 웹훅, 집 PC 재학습 알림과 같은 채널 가능)로 보내고, 없으면 조용히 건너뛴다.
+
+```bash
+# 학교 서버에서 (ssh -p 8822 AIGJ_01_002@s2.java21.net)
+cd ~/gitops && git pull
+mkdir -p ~/trace-backups ~/.config
+echo 'TRACE_ALERT_WEBHOOK_URL=<웹훅 주소>' > ~/.config/trace-ops.env && chmod 600 ~/.config/trace-ops.env
+bash compose/ops/backup.sh      # 한 번 손으로 돌려 크기·남은 디스크 확인
+crontab -e                      # 아래 두 줄 추가
+# 30 3 * * * bash $HOME/gitops/compose/ops/backup.sh >> $HOME/trace-backups/backup.log 2>&1
+# */2 * * * * bash $HOME/gitops/compose/ops/health.sh >> $HOME/trace-backups/health.log 2>&1
+```
+
+| 스크립트 | 하는 일 |
+| --- | --- |
+| `ops/backup.sh` | `pg_dumpall` → `~/trace-backups/db/trace-<시각>.sql.gz`(14일 보관), MinIO 데이터 볼륨 → `~/trace-backups/minio/minio-<시각>.tar.gz`(3일 보관). 서비스는 멈추지 않는다. 실패하면 알림 |
+| `ops/health.sh` | 2분마다 서비스가 멈추거나 unhealthy인지, 웹 → gateway(`/api/v1/gateway/ping`)가 응답하는지 본다. 상태가 바뀔 때만 "장애"·"복구"를 한 번씩 알린다 |
+
+- 백업은 같은 서버 디스크에 남으므로 서버 자체가 망가지는 경우까지 막으려면 가끔 집 PC로 내려받는다: `scp -P 8822 AIGJ_01_002@s2.java21.net:trace-backups/db/<파일> .`
+- DB 복구: `gunzip -c ~/trace-backups/db/<파일>.sql.gz | docker compose exec -T postgres psql -U postgres` (앱을 먼저 `docker compose stop`, 끝나면 `up -d`). MinIO 복구: `docker compose stop minio` 뒤 `docker run --rm --volumes-from $(docker compose ps -q minio) -v ~/trace-backups/minio:/b alpine:3.20 sh -c 'rm -rf /data/* && tar xzf /b/<파일> -C /'` 후 `docker compose start minio`.
+- 보관 일수·위치는 `TRACE_BACKUP_KEEP_DB`·`TRACE_BACKUP_KEEP_MINIO`·`TRACE_BACKUP_DIR`로 바꾼다.
+
 ## 로컬에서 검증
 
 ```bash
