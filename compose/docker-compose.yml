@@ -1,6 +1,8 @@
 # TRACE 로컬 Compose (G1, NFR-06): web(nginx) + 서버 + PostgreSQL·RabbitMQ·Redis·MinIO를 한 번에 띄운다.
 # 11/3 MVP 재조정: 기본은 MVP 앱 5개(web·gateway·auth·rental·capture). 11/6 진단 페어링 시연을 위해 diagnostics-server도 기본에 넣었다(6개).
 # 11/8: 리포트(report-server)와 폰 사진 검사 워커(inspect-worker)도 기본으로 뜬다(앱 8개). 출고·수령·반납 세 시점을 이 파일 하나로 시연한다.
+# 11/10: 사이트 도우미 챗봇(chat-server)과 그 대체 모델(ollama, qwen2.5:3b CPU)을 더했다. 처음 한 번 모델을 받는다:
+#   docker compose exec ollama ollama pull qwen2.5:3b
 # 노트북과 학교 서버(https://gakdo.site → 강사님 nginx → 10.116.64.12:8315) 둘 다에서 같은 파일로 뜬다. 쿠버네티스·Cloudflare 터널은 쓰지 않는다(Cloudflare는 DNS만).
 #
 #   cd compose && cp .env.example .env   # 값 채우기 (커밋 금지)
@@ -140,6 +142,25 @@ services:
       minio-init:
         condition: service_completed_successfully
 
+  # 사이트 도우미 챗봇(GAKDO/chat-server). gateway가 /api/v1/chat/**를 넘긴다. Gemini 무료 API를 먼저 쓰고
+  # 한도를 다 쓰면(429) 아래 ollama의 qwen2.5로 답한다. GEMINI_API_KEY가 비면 ollama로만 답한다.
+  # 내 렌탈·검사 결과는 사용자 토큰으로 gateway를 GET해서 읽는다(DB·메시지에 붙지 않음)
+  chat-server:
+    platform: linux/amd64
+    image: ghcr.io/gakdo/chat-server:${CHAT_SERVER_TAG:-${TRACE_TAG:-develop}}
+    restart: unless-stopped
+    environment:
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+      # 서버에 이미 떠 있는 Ollama를 쓰려면 그 주소로 바꾼다(기본은 아래 ollama 서비스)
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:3b}
+      TRACE_API_URL: http://gateway:8080
+    mem_limit: 256m
+    depends_on:
+      - gateway
+      - ollama
+
   web:
     platform: linux/amd64
     image: ghcr.io/gakdo/web:${WEB_TAG:-${TRACE_TAG:-develop}}
@@ -213,6 +234,18 @@ services:
       retries: 30
     mem_limit: 128m
 
+  # 챗봇 대체 모델(qwen2.5:3b, CPU). 학교 서버에 우리 Ollama가 없어서 같이 띄운다(다른 팀 컨테이너는 쓰지 않는다).
+  # 포트는 밖으로 열지 않는다. 모델은 ollama-data에 남아 재시작해도 다시 받지 않는다
+  ollama:
+    image: ollama/ollama:0.12.6
+    restart: unless-stopped
+    environment:
+      OLLAMA_KEEP_ALIVE: 24h   # 첫 질문마다 모델을 다시 올리지 않게 메모리에 둔다
+    volumes:
+      - ollama-data:/root/.ollama
+    mem_limit: 8g              # 다른 팀과 같이 쓰는 서버라 제한한다(3b는 약 3GB)
+    cpus: ${OLLAMA_CPUS:-6}
+
   # Docker Hub minio/minio는 받을 수 없어 pg-backup의 pgsty/mc와 같은 곳의 pgsty/minio를 쓴다(decisions.md 11/2)
   minio:
     image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z
@@ -258,3 +291,4 @@ volumes:
   rabbitmq-data:
   redis-data:
   minio-data:
+  ollama-data:
