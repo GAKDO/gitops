@@ -164,8 +164,9 @@ services:
       # 서버에 이미 떠 있는 Ollama를 쓰려면 그 주소로 바꾼다(기본은 아래 ollama 서비스)
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:3b}
-      # 아래 ollama cpus와 같은 수로 스레드를 띄운다(많이 띄우면 CPU 제한 안에서 서로 다퉈 더 느리다)
-      OLLAMA_NUM_THREAD: ${OLLAMA_CPUS:-2}
+      # Ollama 추론 스레드 수(정수). 아래 ollama cpus보다 많이 띄우면 CPU 제한 안에서 서로 다퉈 더 느리다.
+      # cpus는 0.5 같은 소수도 되므로 따로 둔다. cpus를 바꾸면 이 값도 그 이하의 정수로 맞춘다(0이면 Ollama 기본값)
+      OLLAMA_NUM_THREAD: ${OLLAMA_NUM_THREAD:-2}
       # 요청 제한(IP 기준). IP당·전체 하루 상한은 Gemini 사용량을 막는다(0이면 끔)
       CHAT_RATE_LIMIT_PER_MINUTE: ${CHAT_RATE_LIMIT_PER_MINUTE:-20}
       CHAT_DAILY_LIMIT_PER_IP: ${CHAT_DAILY_LIMIT_PER_IP:-100}
