@@ -190,8 +190,13 @@ crontab -e                      # 아래 두 줄을 그대로 붙여 넣기
 
 - 백업은 같은 서버 디스크에 남으므로 서버 자체가 망가지는 경우까지 막으려면 가끔 집 PC로 내려받는다: `scp -P 8822 AIGJ_01_002@s2.java21.net:trace-backups/db/<파일> .`
 - 복구 명령은 모두 학교 서버의 `~/gitops/compose`에서 친다(`cd ~/gitops/compose`).
-- DB 복구: 앱만 멈추고 postgres는 켜 둔다. `docker compose stop $(docker compose config --services | grep -vxE 'postgres|minio|minio-init|rabbitmq|redis')` → `gunzip -c ~/trace-backups/db/<파일>.sql.gz | docker compose exec -T postgres psql -U postgres` → `docker compose up -d`
-- MinIO 복구: `docker compose stop minio` → `docker run --rm --volumes-from $(docker compose ps -a -q minio) -v ~/trace-backups/minio:/b alpine:3.20 sh -c 'rm -rf /data/* && tar xzf /b/<파일> -C /'` → `docker compose start minio`
+- DB 복구: 덤프는 `--clean` 없이 만든 `pg_dumpall`이라 기존 `trace` DB 위에 부으면 섞인다. 빈 DB에 붓는다.
+  1. 앱만 멈춘다(postgres는 켜 둔다): `docker compose stop $(docker compose config --services | grep -vxE 'postgres|minio|minio-init|rabbitmq|redis')`
+  2. 기존 DB를 지운다: `docker compose exec -T postgres psql -U postgres -d postgres -c 'DROP DATABASE trace WITH (FORCE)'`
+  3. 붓는다: `gunzip -c ~/trace-backups/db/<파일>.sql.gz | docker compose exec -T postgres psql -U postgres -d postgres 2> ~/trace-backups/restore-err.log`
+  4. 오류를 본다: `grep ERROR ~/trace-backups/restore-err.log | grep -v 'role ".*" already exists'` 가 **아무것도 안 나와야** 한다(역할이 이미 있다는 오류는 정상). 다른 오류가 나오면 앱을 켜지 말고 2단계부터 다시 한다.
+  5. 앱을 켠다: `docker compose up -d`
+- MinIO 복구: 백업 파일을 먼저 확인하고(`gzip -t ~/trace-backups/minio/<파일> && tar tzf ~/trace-backups/minio/<파일> >/dev/null`), `docker compose stop minio` → `docker run --rm --volumes-from $(docker compose ps -a -q minio) -v ~/trace-backups/minio:/b alpine:3.20 sh -c 'find /data -mindepth 1 -delete && tar xzf /b/<파일> -C /'`(숨김 폴더 `.minio.sys`까지 비운 뒤 푼다) → `docker compose start minio`
 - 보관 일수·위치는 `TRACE_BACKUP_KEEP_DB`·`TRACE_BACKUP_KEEP_MINIO`·`TRACE_BACKUP_DIR`로 바꾼다.
 
 ## 로컬에서 검증

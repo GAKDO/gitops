@@ -8,5 +8,9 @@ trace_notify() {
   case "$url" in *hooks.slack.com*) field="text" ;; esac
   # 큰따옴표·역슬래시만 막는다(메시지는 스크립트가 만든 짧은 문장)
   local text="[TRACE 운영] ${1//\\/\\\\}"; text="${text//\"/\\\"}"
-  curl -fsS -m 10 -H 'Content-Type: application/json' -d "{\"$field\":\"$text\"}" "$url" >/dev/null
+  # 2xx만 성공으로 본다(리디렉션 3xx는 실제로 전달되지 않았으므로 실패로 돌려 다음 점검에 다시 보낸다)
+  local code
+  code=$(curl -sS -m 10 -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' \
+    -d "{\"$field\":\"$text\"}" "$url") || return 1
+  case "$code" in 2??) return 0 ;; *) echo "알림 전송 실패: HTTP $code" >&2; return 1 ;; esac
 }
