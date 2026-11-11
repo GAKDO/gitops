@@ -27,7 +27,7 @@ resources:
 images:
 - name: auth-server
   newName: ghcr.io/gakdo/auth-server
-  newTag: 3bdfcf8bbcdca0c0956fa527e1cfe72937c6c41f
+  newTag: a3faeba87d07fa62c6039ba3945077c01f995a69
 - name: capture-server
   newName: ghcr.io/gakdo/capture-server
   newTag: 83ad2f0692502a987a58f578bdd2c1831d83b499
