@@ -33,7 +33,7 @@ images:
   newTag: 83ad2f0692502a987a58f578bdd2c1831d83b499
 - name: diagnostics-server
   newName: ghcr.io/gakdo/diagnostics-server
-  newTag: latest
+  newTag: 19f5e4ff9e8c61062a69449d80abc807497bb62d
 - name: gateway
   newName: ghcr.io/gakdo/gateway
   newTag: 4b09f361a4934b107ecd53c247ee9a9680ca696d
