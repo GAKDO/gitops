@@ -30,7 +30,7 @@ images:
   newTag: 3bdfcf8bbcdca0c0956fa527e1cfe72937c6c41f
 - name: capture-server
   newName: ghcr.io/gakdo/capture-server
-  newTag: latest
+  newTag: 83ad2f0692502a987a58f578bdd2c1831d83b499
 - name: diagnostics-server
   newName: ghcr.io/gakdo/diagnostics-server
   newTag: latest
