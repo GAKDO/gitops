@@ -39,7 +39,7 @@ images:
   newTag: 4b09f361a4934b107ecd53c247ee9a9680ca696d
 - name: rental-server
   newName: ghcr.io/gakdo/rental-server
-  newTag: latest
+  newTag: 6a426b6d94282eb87a1b117d43c3e807b402706a
 - name: report-server
   newName: ghcr.io/gakdo/report-server
   newTag: latest
