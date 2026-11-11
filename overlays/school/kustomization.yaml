@@ -36,7 +36,7 @@ images:
   newTag: latest
 - name: gateway
   newName: ghcr.io/gakdo/gateway
-  newTag: 4d6d9b318f0c1541d084adccfa4420ab39c09f23
+  newTag: 4b09f361a4934b107ecd53c247ee9a9680ca696d
 - name: rental-server
   newName: ghcr.io/gakdo/rental-server
   newTag: latest
