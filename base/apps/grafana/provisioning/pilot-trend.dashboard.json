@@ -1,0 +1,243 @@
+{
+  "uid": "trace-pilot-trend",
+  "title": "trace 파일럿 추이",
+  "description": "FR-PIL-02: 파일럿 기기별 배터리·벤치마크 추이. 측정값은 diagnostics-server가 trace-pilot에 쓴다(contracts diagnostics/influx.md). 별칭은 \"기기 별칭표\" 패널의 값 매핑(deviceId → 별칭)으로 보인다",
+  "tags": [
+    "trace",
+    "pilot",
+    "FR-PIL-02"
+  ],
+  "editable": true,
+  "schemaVersion": 39,
+  "time": {
+    "from": "now-30d",
+    "to": "now"
+  },
+  "timezone": "Asia/Seoul",
+  "refresh": "",
+  "templating": {
+    "list": [
+      {
+        "name": "deviceId",
+        "label": "기기(deviceId)",
+        "type": "query",
+        "datasource": {
+          "type": "influxdb",
+          "uid": "trace-pilot"
+        },
+        "query": "import \"influxdata/influxdb/schema\"\nschema.tagValues(bucket: \"trace-pilot\", tag: \"deviceId\", predicate: (r) => r._measurement == \"trace_battery\" or r._measurement == \"trace_benchmark\", start: -365d)",
+        "multi": true,
+        "includeAll": true,
+        "refresh": 2,
+        "sort": 1
+      },
+      {
+        "name": "metric",
+        "label": "벤치마크 지표",
+        "type": "query",
+        "datasource": {
+          "type": "influxdb",
+          "uid": "trace-pilot"
+        },
+        "query": "import \"influxdata/influxdb/schema\"\nschema.tagValues(bucket: \"trace-pilot\", tag: \"metric\", predicate: (r) => r._measurement == \"trace_benchmark\", start: -365d)",
+        "multi": true,
+        "includeAll": true,
+        "refresh": 2,
+        "sort": 1
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 4,
+      "type": "table",
+      "title": "기기 별칭표 (deviceId → 별칭, 마지막 측정)",
+      "description": "별칭은 값 매핑으로 붙인다. Import 뒤 이 패널의 Value mappings에 관리자 화면의 파일럿 목록(deviceId → P01…)을 넣는다. 사람 이름은 넣지 않는다(FR-PIL-01)",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 7
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "trace-pilot"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "query": "from(bucket: \"trace-pilot\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"trace_battery\" or r._measurement == \"trace_benchmark\")\n  |> filter(fn: (r) => contains(value: r.deviceId, set: ${deviceId:json}))\n  |> keep(columns: [\"deviceId\", \"_time\"])\n  |> group(columns: [\"deviceId\"])\n  |> max(column: \"_time\")\n  |> group()\n  |> sort(columns: [\"_time\"])"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "deviceId"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "기기 (별칭)"
+              },
+              {
+                "id": "mappings",
+                "value": []
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "_time"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "마지막 측정"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true
+      }
+    },
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "배터리 건강도 (%) = 완충 용량 ÷ 설계 용량",
+      "gridPos": {
+        "x": 0,
+        "y": 7,
+        "w": 12,
+        "h": 9
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "trace-pilot"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "query": "from(bucket: \"trace-pilot\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"trace_battery\" and r._field == \"healthPercent\")\n  |> filter(fn: (r) => contains(value: r.deviceId, set: ${deviceId:json}))\n  |> group(columns: [\"deviceId\"])\n  |> sort(columns: [\"_time\"])\n  |> keep(columns: [\"_time\", \"_value\", \"deviceId\"])"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 1,
+          "displayName": "${__field.labels.deviceId}",
+          "custom": {
+            "drawStyle": "line",
+            "showPoints": "always",
+            "pointSize": 7,
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "배터리 사이클 수",
+      "gridPos": {
+        "x": 12,
+        "y": 7,
+        "w": 12,
+        "h": 9
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "trace-pilot"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "query": "from(bucket: \"trace-pilot\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"trace_battery\" and r._field == \"cycleCount\")\n  |> filter(fn: (r) => contains(value: r.deviceId, set: ${deviceId:json}))\n  |> group(columns: [\"deviceId\"])\n  |> sort(columns: [\"_time\"])\n  |> keep(columns: [\"_time\", \"_value\", \"deviceId\"])"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "displayName": "${__field.labels.deviceId}",
+          "custom": {
+            "drawStyle": "line",
+            "showPoints": "always",
+            "pointSize": 7,
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "벤치마크 ${metric} (3회 중앙값)",
+      "repeat": "metric",
+      "repeatDirection": "h",
+      "maxPerRow": 3,
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 8,
+        "h": 9
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "trace-pilot"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "query": "from(bucket: \"trace-pilot\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"trace_benchmark\" and r._field == \"median\" and r.metric == \"${metric}\")\n  |> filter(fn: (r) => contains(value: r.deviceId, set: ${deviceId:json}))\n  |> group(columns: [\"deviceId\", \"unit\"])\n  |> sort(columns: [\"_time\"])\n  |> keep(columns: [\"_time\", \"_value\", \"deviceId\", \"unit\"])"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "displayName": "${__field.labels.deviceId} (${__field.labels.unit})",
+          "custom": {
+            "drawStyle": "line",
+            "showPoints": "always",
+            "pointSize": 7,
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    }
+  ]
+}

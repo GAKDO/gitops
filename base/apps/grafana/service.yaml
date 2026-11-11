@@ -1,0 +1,15 @@
+# 같은 네임스페이스의 web(nginx /grafana/)만 부른다. 밖으로 직접 열지 않는다
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  labels:
+    app.kubernetes.io/name: grafana
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: grafana
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http

@@ -1,0 +1,315 @@
+# TRACE 로컬 Compose (G1, NFR-06): web(nginx) + 서버 + PostgreSQL·RabbitMQ·Redis·MinIO를 한 번에 띄운다.
+# 11/3 MVP 재조정: 기본은 MVP 앱 5개(web·gateway·auth·rental·capture). 11/6 진단 페어링 시연을 위해 diagnostics-server도 기본에 넣었다(6개).
+# 11/8: 리포트(report-server)와 폰 사진 검사 워커(inspect-worker)도 기본으로 뜬다(앱 8개). 출고·수령·반납 세 시점을 이 파일 하나로 시연한다.
+# 11/10: 사이트 도우미 챗봇(chat-server)과 그 대체 모델(ollama, qwen2.5:3b CPU)을 더했다. 처음 한 번 모델을 받는다:
+#   docker compose exec ollama ollama pull qwen2.5:3b
+# 노트북과 학교 서버(https://gakdo.site → 강사님 nginx → 10.116.64.12:8315) 둘 다에서 같은 파일로 뜬다. 쿠버네티스·Cloudflare 터널은 쓰지 않는다(Cloudflare는 DNS만).
+#
+#   cd compose && cp .env.example .env   # 값 채우기 (커밋 금지)
+#   docker login ghcr.io                 # GHCR 패키지가 비공개면 read:packages 토큰으로 한 번
+#   docker compose up -d                  # web·gateway·auth·rental·capture·diagnostics·report·inspect-worker + 인프라
+#
+# 탐지 모델 바꾸기(폰 사진): models/ 폴더에 best.onnx·model.json(부스 Jetson과 같은 파일)을 넣고
+#   docker compose restart inspect-worker   # 로그에 '폰 탐지 모델 <버전>'이 보이면 끝. 폴더가 비면 정합·3D만 하고 탐지는 건너뛴다
+#
+# 입구는 web nginx 하나다(WEB_PORT, 기본 8315): / 화면, /api/ → gateway, /trace-captures/·/trace-derived/ → MinIO.
+# 앱 이미지·환경 변수 이름은 클러스터(overlays/school)와 같다. 접속 주소는 infra.env, 비밀은 .env에서 받는다.
+name: trace
+
+# 비밀은 .env에서 Compose 변수로만 읽고, 컨테이너에는 그 서비스가 쓰는 값만 넘긴다(.env 통째로 넣지 않음)
+x-app-env: &app-env
+  SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-compose}
+  JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=75 -XX:+ExitOnOutOfMemoryError"
+  SERVER_SHUTDOWN: graceful
+  # 공개 주소에서 나오는 값. infra.env가 아니라 여기서 PUBLIC_BASE_URL 하나로 맞춘다
+  WEB_PUBLIC_URL: ${PUBLIC_BASE_URL:?.env의 PUBLIC_BASE_URL이 비어 있습니다}
+  TRACE_WEB_ORIGIN: ${PUBLIC_BASE_URL}
+  MINIO_PUBLIC_BASE: ${PUBLIC_BASE_URL}
+  REDIS_PASSWORD: ${REDIS_PASSWORD}
+# DB·메시지를 쓰는 서버 5개 공통
+x-server-secrets: &server-secrets
+  DB_USERNAME: ${DB_USERNAME}
+  DB_PASSWORD: ${DB_PASSWORD}
+  RABBITMQ_USERNAME: ${RABBITMQ_USERNAME}
+  RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+
+x-app: &app
+  platform: linux/amd64        # GHCR 이미지는 amd64만 있다(Apple Silicon은 에뮬레이션으로 돈다)
+  restart: unless-stopped      # 앱이 죽거나 지워져도 다시 뜬다
+  env_file:
+    - infra.env
+  mem_limit: 768m
+  depends_on:
+    postgres:
+      condition: service_healthy
+    rabbitmq:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+    minio-init:
+      condition: service_completed_successfully
+
+services:
+  # ── 앱 ──
+  gateway:
+    <<: *app
+    image: ghcr.io/gakdo/gateway:${GATEWAY_TAG:-${TRACE_TAG:-develop}}
+    environment:
+      <<: *app-env
+  auth-server:
+    <<: *app
+    image: ghcr.io/gakdo/auth-server:${AUTH_SERVER_TAG:-${TRACE_TAG:-develop}}
+    environment:
+      <<: [*app-env, *server-secrets]
+      JWT_PRIVATE_KEY: ${JWT_PRIVATE_KEY:-}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      BOOTH_CLIENT_ID: ${BOOTH_CLIENT_ID:-}
+      BOOTH_CLIENT_SECRET: ${BOOTH_CLIENT_SECRET:-}
+      DEMO_CUSTOMER_EMAIL: ${DEMO_CUSTOMER_EMAIL:-}
+      DEMO_CUSTOMER_PASSWORD: ${DEMO_CUSTOMER_PASSWORD:-}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      # 소셜 로그인 client id/secret(비우면 그 제공자 버튼이 숨겨짐)
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
+      KAKAO_CLIENT_ID: ${KAKAO_CLIENT_ID:-}
+      KAKAO_CLIENT_SECRET: ${KAKAO_CLIENT_SECRET:-}
+      NAVER_CLIENT_ID: ${NAVER_CLIENT_ID:-}
+      NAVER_CLIENT_SECRET: ${NAVER_CLIENT_SECRET:-}
+  rental-server:
+    <<: *app
+    image: ghcr.io/gakdo/rental-server:${RENTAL_SERVER_TAG:-${TRACE_TAG:-develop}}
+    environment:
+      <<: [*app-env, *server-secrets]
+  capture-server:
+    <<: *app
+    image: ghcr.io/gakdo/capture-server:${CAPTURE_SERVER_TAG:-${TRACE_TAG:-develop}}
+    environment:
+      <<: [*app-env, *server-secrets]
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
+      # 성능 그래프의 모델별 mAP(학습 뒤 채움, 예: yolo11s-seg-v001-trt-fp16=0.71/0.48). 비우면 빈 목록
+      MODEL_METRICS: ${MODEL_METRICS:-}
+  # 11/6 재도입: 에이전트 페어링·진단 업로드 시연(DI1·AG1). Influx 없이 뜬다(INFLUX_TOKEN은 비워도 됨)
+  diagnostics-server:
+    <<: *app
+    image: ghcr.io/gakdo/diagnostics-server:${DIAGNOSTICS_SERVER_TAG:-${TRACE_TAG:-develop}}
+    environment:
+      <<: [*app-env, *server-secrets]
+      INFLUX_TOKEN: ${INFLUX_TOKEN:-}
+  # 타임라인·해시 체인 봉인·검증·진행률(SSE). 11/4부터 학교 서버에서 켜 두었고 11/8 기본 기동에 넣었다
+  report-server:
+    <<: *app
+    image: ghcr.io/gakdo/report-server:${REPORT_SERVER_TAG:-${TRACE_TAG:-develop}}
+    environment:
+      <<: [*app-env, *server-secrets]
+      # 해시 체인 서명 키(Ed25519). 비면 report-server가 뜨지 않는다(init-env.sh가 빈 값만 채운다)
+      # 이미 쓰던 설치를 올릴 때도 `up -d` 전에 ./init-env.sh를 한 번 돌린다. 값이 있으면 그대로 두고 빈 값만 채운다
+      # (만들기: openssl genpkey -algorithm ed25519 | base64 | tr -d '\n'). 한 번 정하면 바꾸지 않는다
+      CHAIN_SIGNING_KEY: ${CHAIN_SIGNING_KEY:-}
+      # 검증할 때 봉인한 사진이 MinIO에서 바뀌지 않았는지 다시 본다
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
+      # inspect-worker의 면별 정합 진행(Redis)을 화면 진행률 40%(ALIGNED)로 보낸다
+      REPORT_PROGRESS_REDIS_ENABLED: "true"
+
+  # 폰 사진 정합(9면 표준 좌표)·흠집 탐지(best.onnx, CPU)·3D 텍스처(ML2). trace.capture.uploaded를 받아
+  # trace.inspect.completed를 낸다. 부스 세트는 탐지 없이 정합·텍스처만 한다(부스 탐지는 Jetson이 이미 보냄).
+  # 꺼져 있던 동안 쌓인 세트는 켜지면 처리한다(durable 큐). 진행률은 Redis trace:progress:{rentalId}
+  inspect-worker:
+    platform: linux/amd64
+    image: ghcr.io/gakdo/inspect-worker:${INSPECT_WORKER_TAG:-${TRACE_TAG:-develop}}
+    restart: unless-stopped
+    env_file:
+      - infra.env
+    environment:
+      RABBITMQ_USERNAME: ${RABBITMQ_USERNAME}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      TRACE_MODEL_DIR: /models
+      # 폰 사진 탐지 문턱(부스와 같은 0.25 권장). 이벤트에 기종이 없을 때 쓰는 기본 기종
+      TRACE_DETECT_CONF: ${TRACE_DETECT_CONF:-0.25}
+      TRACE_DETECT_THREADS: ${TRACE_DETECT_THREADS:-2}
+      TRACE_DEVICE_MODEL: ${TRACE_DEVICE_MODEL:-MBA13-M2}
+      # 정합 방식: contour(윤곽, 기본) | features(같은 렌탈 첫 시점 사진에 특징점으로 다시 맞춤. models/에
+      # superpoint.onnx·lightglue.onnx가 있으면 LightGlue, 없으면 ORB, 결과가 나쁘면 윤곽 그대로)
+      TRACE_ALIGN: ${TRACE_ALIGN:-contour}
+    volumes:
+      - ./models:/models:ro
+    mem_limit: 2g
+    cpus: ${INSPECT_WORKER_CPUS:-2}
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+
+  # 사이트 도우미 챗봇(GAKDO/chat-server). gateway가 /api/v1/chat/**를 넘긴다. Gemini 무료 API를 먼저 쓰고
+  # 한도를 다 쓰면(429) 아래 ollama의 qwen2.5로 답한다. GEMINI_API_KEY가 비면 ollama로만 답한다.
+  # 내 렌탈·검사 결과는 사용자 토큰으로 gateway를 GET해서 읽는다(DB·메시지에 붙지 않음)
+  chat-server:
+    platform: linux/amd64
+    image: ghcr.io/gakdo/chat-server:${CHAT_SERVER_TAG:-${TRACE_TAG:-develop}}
+    restart: unless-stopped
+    environment:
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash}
+      # 서버에 이미 떠 있는 Ollama를 쓰려면 그 주소로 바꾼다(기본은 아래 ollama 서비스)
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:3b}
+      # Ollama 추론 스레드 수(정수). 아래 ollama cpus보다 많이 띄우면 CPU 제한 안에서 서로 다퉈 더 느리다.
+      # cpus는 0.5 같은 소수도 되므로 따로 둔다. cpus를 바꾸면 이 값도 그 이하의 정수로 맞춘다(0이면 Ollama 기본값)
+      OLLAMA_NUM_THREAD: ${OLLAMA_NUM_THREAD:-2}
+      # 요청 제한(IP 기준). IP당·전체 하루 상한은 Gemini 사용량을 막는다(0이면 끔)
+      CHAT_RATE_LIMIT_PER_MINUTE: ${CHAT_RATE_LIMIT_PER_MINUTE:-20}
+      CHAT_DAILY_LIMIT_PER_IP: ${CHAT_DAILY_LIMIT_PER_IP:-100}
+      CHAT_DAILY_LIMIT_TOTAL: ${CHAT_DAILY_LIMIT_TOTAL:-1000}
+      TRACE_API_URL: http://gateway:8080
+    mem_limit: 256m
+    depends_on:
+      - gateway
+      - ollama
+
+  web:
+    platform: linux/amd64
+    image: ghcr.io/gakdo/web:${WEB_TAG:-${TRACE_TAG:-develop}}
+    restart: unless-stopped
+    environment:
+      API_UPSTREAM: gateway:8080
+      MINIO_UPSTREAM: minio:9000
+      # 앞단 프록시(학교 서버는 강사님 nginx)의 IP·CIDR(쉼표). 그 연결의 X-Forwarded-For로 실제 사용자 IP를 정해
+      # gateway 요청 제한(로그인·페어링 분당 10회)을 사람마다 센다. 비우면 모든 사용자가 프록시 IP 하나로 세진다
+      TRUSTED_PROXIES: ${WEB_TRUSTED_PROXIES:-}
+    ports:
+      - "${WEB_BIND:-0.0.0.0}:${WEB_PORT:-8315}:8080"
+    # tls/에 tls.crt·tls.key가 있으면 HTTPS로 연다(폰 카메라는 HTTPS 필요). 앞에 TLS 프록시가 있으면 비워 둔다
+    volumes:
+      - ./tls:/etc/trace-tls:ro
+    mem_limit: 128m
+    depends_on:
+      - gateway
+
+  # ── 인프라 (모두 고정 태그, decisions.md 11/2) ──
+  postgres:
+    image: postgres:16.15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?.env의 POSTGRES_PASSWORD가 비어 있습니다}
+      TRACE_DB_USER: ${DB_USERNAME:?.env의 DB_USERNAME이 비어 있습니다}
+      TRACE_DB_PASSWORD: ${DB_PASSWORD:?.env의 DB_PASSWORD가 비어 있습니다}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./init-db.sh:/docker-entrypoint-initdb.d/10-trace.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d trace"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    mem_limit: 512m
+
+  rabbitmq:
+    image: rabbitmq:4.1.8-management-alpine
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USERNAME:?.env의 RABBITMQ_USERNAME이 비어 있습니다}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?.env의 RABBITMQ_PASSWORD가 비어 있습니다}
+      RABBITMQ_DEFAULT_VHOST: /trace
+    # 집 PC 워커(inspect-worker)가 붙을 AMQP 포트. 기본은 이 기기에서만 열고, 같은 망에 열려면 INFRA_BIND=0.0.0.0
+    # 관리 화면(15672, 평문 HTTP 로그인)은 언제나 이 기기에서만 연다. 호스트 포트가 이미 쓰이면 *_HOST_PORT로 바꾼다
+    ports:
+      - "${INFRA_BIND:-127.0.0.1}:${RABBITMQ_HOST_PORT:-5672}:5672"
+      - "127.0.0.1:${RABBITMQ_MGMT_HOST_PORT:-15672}:15672"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+    mem_limit: 512m
+
+  redis:
+    image: redis:7.4.12-alpine
+    restart: unless-stopped
+    command: ["sh", "-c", 'exec redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD"']
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?.env의 REDIS_PASSWORD가 비어 있습니다}
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", 'REDISCLI_AUTH="$$REDIS_PASSWORD" redis-cli ping | grep -q PONG']
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    mem_limit: 128m
+
+  # 챗봇 대체 모델(qwen2.5:3b, CPU). 학교 서버에 우리 Ollama가 없어서 같이 띄운다(다른 팀 컨테이너는 쓰지 않는다).
+  # 포트는 밖으로 열지 않는다. 모델은 ollama-data에 남아 재시작해도 다시 받지 않는다
+  # 11/10: 폰 수령 검사(inspect-worker)와 같은 CPU를 쓰므로 검사가 먼저다. CPU 2개로 묶고, CPU가 모자랄 때는
+  # cpu_shares를 낮춰(기본 1024의 1/4) 검사 쪽이 먼저 받게 한다. 질문은 한 번에 하나만 처리한다
+  ollama:
+    image: ollama/ollama:0.12.6
+    restart: unless-stopped
+    environment:
+      OLLAMA_KEEP_ALIVE: 24h   # 첫 질문마다 모델을 다시 올리지 않게 메모리에 둔다
+      OLLAMA_NUM_PARALLEL: 1
+      OLLAMA_MAX_LOADED_MODELS: 1
+    volumes:
+      - ollama-data:/root/.ollama
+    mem_limit: ${OLLAMA_MEM_LIMIT:-4g}   # qwen2.5:3b(q4)는 약 2GB + 대화 문맥
+    cpus: ${OLLAMA_CPUS:-2}
+    cpu_shares: 256
+
+  # Docker Hub minio/minio는 받을 수 없어 pg-backup의 pgsty/mc와 같은 곳의 pgsty/minio를 쓴다(decisions.md 11/2)
+  minio:
+    image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z
+    restart: unless-stopped
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:?.env의 MINIO_ACCESS_KEY가 비어 있습니다}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:?.env의 MINIO_SECRET_KEY가 비어 있습니다}
+    ports:
+      # 호스트 포트만 바뀐다. 컨테이너끼리는 언제나 minio:9000으로 붙는다
+      - "${INFRA_BIND:-127.0.0.1}:${MINIO_HOST_PORT:-9000}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_HOST_PORT:-9001}:9001"   # 콘솔은 언제나 이 기기에서만
+    volumes:
+      - minio-data:/data
+    mem_limit: 512m
+
+  # 버킷을 만들고 끝난다(이미 있으면 그대로). 모두 비공개이고 사진은 사전 서명 URL로만 오간다
+  minio-init:
+    image: pgsty/mc:RELEASE.2026-09-16T00-00-00Z
+    restart: "no"
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        set -eu
+        export MC_CONFIG_DIR=/tmp/mc
+        for i in $$(seq 1 30); do
+          mc alias set local http://minio:9000 "$$MINIO_ACCESS_KEY" "$$MINIO_SECRET_KEY" >/dev/null 2>&1 && break
+          echo "MinIO 기다리는 중 ($$i)"; sleep 2
+        done
+        for b in trace-captures trace-derived; do
+          mc mb --ignore-existing "local/$$b"
+          mc anonymous set none "local/$$b"
+        done
+        mc ls local
+    environment:
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
+    depends_on:
+      - minio
+
+volumes:
+  postgres-data:
+  rabbitmq-data:
+  redis-data:
+  minio-data:
+  ollama-data:
