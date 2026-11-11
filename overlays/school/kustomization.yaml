@@ -42,7 +42,7 @@ images:
   newTag: 6a426b6d94282eb87a1b117d43c3e807b402706a
 - name: report-server
   newName: ghcr.io/gakdo/report-server
-  newTag: latest
+  newTag: 30f8c58dd8f7f581e8a7c3fb4a8404ea86bb6aa9
 - name: web
   newName: ghcr.io/gakdo/web
   newTag: 04ef6e2bb0de7c45133f57aab0509d4791e335d1
