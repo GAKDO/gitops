@@ -24,7 +24,8 @@ jobs:
   check:
     name: 운영 점검
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # 가장 나쁜 경우(8곳 모두 10초씩 세 번 + 사이 대기 10초 두 번 = 400초)에도 결과 표와 알림까지 가게 넉넉히 둔다
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: 화면·서버 응답과 인증서 확인
@@ -35,14 +36,14 @@ jobs:
             echo "| 대상 | 결과 | 버전·시간 |"
             echo "|---|---|---|"
           } >> "$GITHUB_STEP_SUMMARY"
-          # 한 번 실패는 배포로 다시 뜨는 중일 수 있어 20초 간격으로 세 번까지 본다
+          # 한 번 실패는 배포로 다시 뜨는 중일 수 있어 10초 간격으로 세 번까지 본다
           probe() {
             local name="$1" path="$2" out code body t i
             for i in 1 2 3; do
               out=$(curl -sS -m 10 -o /tmp/body -w '%{http_code} %{time_total}' "$base$path" 2>/dev/null) || out="000 0"
               code=${out%% *}; t=${out##* }
               [ "$code" = 200 ] && break
-              [ "$i" = 3 ] || sleep 20
+              [ "$i" = 3 ] || sleep 10
             done
             body=$(head -c 200 /tmp/body 2>/dev/null | tr -d '\n|' || true)
             ver=$(grep -oE '[0-9a-f]{40}' <<<"$body" | head -n 1 || true)
@@ -63,7 +64,7 @@ jobs:
           # 인증서 남은 날 (https일 때만)
           case "$base" in https://*)
             host=${base#https://}; host=${host%%/*}
-            end=$(echo | openssl s_client -servername "$host" -connect "$host:443" 2>/dev/null | openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2 || true)
+            end=$(echo | timeout 15 openssl s_client -servername "$host" -connect "$host:443" 2>/dev/null | openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2 || true)
             if [ -n "$end" ]; then
               days=$(( ($(date -d "$end" +%s) - $(date +%s)) / 86400 ))
               if [ "$days" -lt "$CERT_MIN_DAYS" ]; then

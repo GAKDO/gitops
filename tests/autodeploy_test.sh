@@ -16,7 +16,7 @@ if [ "$1" = compose ]; then
   shift
   case "$1" in
     config)
-      if [ "$2" = --services ]; then printf '%s\n' auth-server web postgres; else echo "ghcr.io/gakdo/$3:develop"; fi ;;
+      printf '%s\n' auth-server web postgres ;;
     ps) [ -f "$W/run.$3" ] && echo "cid-$3" ;;
     pull) shift 2; for s in "$@"; do [ -f "$W/remote.$s" ] && cp "$W/remote.$s" "$W/tag.$s"; done ;;
     up) s="${*: -1}"; cp "$W/tag.$s" "$W/run.$s"; echo "up $s $(cat "$W/tag.$s")" >> "$W/ups" ;;
@@ -27,7 +27,7 @@ fi
 case "$1" in
   inspect)
     s="${4#cid-}"
-    case "$3" in *State.Status*) echo "running 0" ;; *) cat "$W/run.$s" ;; esac ;;
+    case "$3" in *State.Status*) echo "running 0" ;; *Config.Image*) echo "ghcr.io/gakdo/$s:develop" ;; *) cat "$W/run.$s" ;; esac ;;
   image)
     case "$4" in
       *.Id*) cat "$W/tag.$(svc_of "$5")" ;;
@@ -41,7 +41,7 @@ cat > "$T/bin/curl" <<'FAKE'
 W="$FAKE_WORLD"; url="${*: -1}"
 case "$url" in
   http://*auth/ping) s=auth-server ;; http://*version.txt) s=web ;;
-  *hooks*) echo "$*" >> "$W/notified"; printf 200; exit 0 ;;
+  *hooks*) [ -e "$W/hook-down" ] && exit 7; echo "$*" >> "$W/notified"; printf 200; exit 0 ;;
   *) exit 22 ;;
 esac
 id=$(cat "$W/run.$s"); grep -qx "$id" "$W/broken" 2>/dev/null && exit 22
@@ -68,10 +68,12 @@ run >/dev/null
 grep -q "auth-server aaa1000 bbb2000 ok" "$T/home/.cache/trace-deploy/history.log" && ok "배포 이력을 남긴다" || fail "이력"
 grep -q "배포 완료" "$T/w/notified" && ok "배포 완료를 알린다" || fail "완료 알림"
 
-set_img remote.auth-server ccc3; echo sha256:ccc3 > "$T/w/broken"
-if run >/dev/null; then fail "실패한 배포는 0이 아닌 값으로 끝나야 한다"; fi
+set_img remote.auth-server ccc3; echo sha256:ccc3 > "$T/w/broken"; touch "$T/w/hook-down"
+if run >/dev/null 2>&1; then fail "실패한 배포는 0이 아닌 값으로 끝나야 한다"; fi
+grep -q "되돌림" "$T/w/notified" && fail "웹훅이 죽어 있으면 알림이 가지 않아야 한다"
+rm "$T/w/hook-down"; run >/dev/null
+grep -q "되돌림" "$T/w/notified" && ok "보내지 못한 되돌림 알림은 다음 실행 때 다시 보낸다" || fail "알림 재전송"
 [ "$(cat "$T/w/run.auth-server")" = sha256:bbb2 ] && ok "새 이미지가 응답하지 않으면 직전 이미지로 되돌린다" || fail "되돌리기"
-grep -q "되돌림" "$T/w/notified" && ok "되돌림을 알린다" || fail "되돌림 알림"
 before=$(ups); run >/dev/null
 [ "$(ups)" = "$before" ] && ok "실패한 이미지는 다음 이미지가 올 때까지 다시 시도하지 않는다" || fail "재시도 금지"
 
