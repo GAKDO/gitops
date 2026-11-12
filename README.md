@@ -32,6 +32,19 @@ gitops/
 
 ## 배포 흐름
 
+**지금 운영(학교 서버 Compose, `https://gakdo.site`)** 은 아래 "로컬 Compose" 구성으로 돈다. 쿠버네티스 매니페스트와 Argo CD 경로는 클러스터를 쓸 때를 위해 그대로 두고 CI로 계속 검증한다.
+
+```
+앱 레포 develop 머지 → GitHub Actions(테스트 → 이미지) → GHCR ghcr.io/gakdo/<앱>:develop
+  → 학교 서버의 compose/ops/autodeploy.sh(cron 3분)가 새 이미지를 받아 그 서비스만 교체
+  → ping 응답의 커밋이 새 이미지와 같은지 확인 → 실패하면 직전 이미지로 되돌리고 알림
+  → 바깥에서는 "운영 점검" 워크플로가 30분마다 gakdo.site의 화면·서버·인증서를 확인
+```
+
+서버가 밖으로 나가 이미지를 받아 오는 방식이라 GitHub에 서버 접속 키를 두지 않는다. 자세한 설정은 아래 "Compose 운영 자동화".
+
+**클러스터(Argo CD) 경로**
+
 ```
 앱 레포 main 푸시 → GitHub Actions(빌드·테스트) → GHCR ghcr.io/gakdo/<앱>:<커밋 SHA>
   → 같은 워크플로가 이 레포의 overlays/school에서 kustomize edit set image → main에 커밋
@@ -183,11 +196,21 @@ crontab -e                      # 아래 두 줄을 그대로 붙여 넣기
 */2 * * * * bash $HOME/gitops/compose/ops/health.sh >> $HOME/trace-backups/health.log 2>&1
 ```
 
+자동 배포를 켜려면 한 줄을 더한다(넣기 전에는 지금처럼 손으로 `docker compose pull && docker compose up -d`).
+
+```cron
+*/3 * * * * bash $HOME/gitops/compose/ops/autodeploy.sh >> $HOME/trace-backups/deploy.log 2>&1
+```
+
 | 스크립트 | 하는 일 |
 | --- | --- |
 | `ops/backup.sh` | `pg_dumpall` → `~/trace-backups/db/trace-<시각>.sql.gz`(14일 보관), MinIO 데이터 볼륨 → `~/trace-backups/minio/minio-<시각>.tar.gz`(3일 보관). MinIO는 묶는 동안만 잠깐 일시 정지(pause)해 한 시점의 파일만 담는다. 실패하면 알림 |
+| `ops/autodeploy.sh` | 3분마다 앱 이미지(`TRACE_DEPLOY_SERVICES`, 기본은 서버 6개·chat-server·web)를 받아, 지금 도는 컨테이너와 다르면 그 서비스만 바꾼다. 최대 180초 동안 컨테이너가 죽지 않았는지와 ping 응답의 커밋이 새 이미지의 커밋인지 확인하고, 실패하면 직전 이미지로 되돌린 뒤 그 이미지는 다음 이미지가 올 때까지 다시 시도하지 않는다. 결과는 `~/.cache/trace-deploy/history.log`와 알림으로 남는다. compose 파일·`.env`·DB·모델 파일은 건드리지 않는다 |
 | `ops/health.sh` | 2분마다 서비스가 멈추거나 unhealthy인지, 웹 → gateway(`/api/v1/gateway/ping`)가 응답하는지 본다. 정상→장애, 장애→정상으로 바뀔 때만 한 번씩 알린다(알림 전송이 실패하면 다음 점검에 다시 보냄) |
 
+- 자동 배포 명령(학교 서버 `~/gitops/compose`에서): `bash ops/autodeploy.sh status`(서비스별 도는 버전·받아 둔 버전·최근 배포), `bash ops/autodeploy.sh pause 촬영`(촬영·시연 전에 멈춤), `bash ops/autodeploy.sh resume`(다시 켬). 교체하는 서비스는 수 초에서 수십 초 동안 응답이 끊긴다(무중단 아님). inspect-worker는 검사 도중에 다시 켜지지 않게 기본에서 뺐다.
+- 되돌린 뒤 서버의 `:develop` 태그는 실패한 새 이미지를 가리킨 채로 남는다. 그 서비스를 손으로 `docker compose up -d` 하면 실패한 이미지가 뜨므로, 고친 이미지가 올라온 뒤에 한다.
+- 바깥 점검: `.github/workflows/site-check.yml`("운영 점검")이 30분마다 GitHub 러너에서 `https://gakdo.site`의 화면·서버 6개·챗봇 ping과 인증서 남은 기간(14일 미만이면 실패)을 본다. 서버·앞단 nginx·DNS가 죽어 `health.sh`가 알릴 수 없는 경우를 잡는다.
 - 백업은 같은 서버 디스크에 남으므로 서버 자체가 망가지는 경우까지 막으려면 가끔 집 PC로 내려받는다: `scp -P 8822 AIGJ_01_002@s2.java21.net:trace-backups/db/<파일> .`
 - 복구 명령은 모두 학교 서버의 `~/gitops/compose`에서 친다(`cd ~/gitops/compose`).
 - DB 복구: 덤프는 `--clean` 없이 만든 `pg_dumpall`이라 기존 `trace` DB 위에 부으면 섞인다. 빈 DB에 붓는다.

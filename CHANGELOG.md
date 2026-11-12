@@ -8,6 +8,8 @@ main에 버전이 적힌 CHANGELOG가 올라가면 release.yml이 태그와 GitH
 
 ### 추가
 
+- 학교 서버 자동 배포(`compose/ops/autodeploy.sh`): 새 이미지를 받아 바뀐 서비스만 교체하고, ping 응답의 커밋으로 새 버전을 확인한 뒤 실패하면 직전 이미지로 되돌리고 알림. 멈춤·다시 켜기·상태 명령과 가짜 docker 시험(`tests/autodeploy_test.sh`, 매니페스트 검증에서 실행)
+- 바깥 운영 점검 워크플로(`site-check.yml`): 30분마다 `https://gakdo.site`의 화면·서버 6개·챗봇 응답과 인증서 남은 기간을 확인하고 실패하면 알림
 - 로컬 Compose(G1, `compose/`): 서버 6개 + web + PostgreSQL·RabbitMQ·Redis·MinIO를 `docker compose up` 한 번으로 띄움. 입구는 web nginx 하나(`/api/` → gateway, `/trace-captures/`·`/trace-derived/` → MinIO), 공개 주소는 `.env`의 `PUBLIC_BASE_URL`, 이미지는 GHCR 태그(기본 `develop`). 매니페스트 검증에 `docker compose config` 확인을 더함
 - 로컬 Compose report-server(RP1): `CHAIN_SIGNING_KEY`를 필수로 바꾸고(비면 `compose config`에서 막힘), 봉인 사진 재확인용 `MINIO_ACCESS_KEY`·`MINIO_SECRET_KEY`를 넘김
 - 파일럿 추이 Grafana(`base/apps/grafana`, NFR-05 예외): grafana-oss 12.1.1, provisioning은 web `grafana/` 복사본, 공개 주소 `https://gakdo.site/grafana/`. trace-secrets에 `GRAFANA_ADMIN_PASSWORD`·`INFLUX_READ_TOKEN`, infra.env에 `INFLUX_ORG` 자리 추가, `INFLUX_URL`은 내부망 주소 `http://10.116.64.13:8086`로 바꿈

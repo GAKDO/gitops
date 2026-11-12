@@ -9,6 +9,9 @@ URL="${TRACE_HEALTH_URL:-}"
 . "$(dirname "$0")/notify.sh"
 mkdir -p "$(dirname "$STATE")"
 cd "$COMPOSE" || exit 1
+# 자동 배포(autodeploy.sh)가 서비스를 바꾸는 중이면 이번 점검은 건너뛴다(교체 중 잠깐 끊김을 장애로 알리지 않게)
+DEPLOY_LOCK="${TRACE_DEPLOY_STATE:-$HOME/.cache/trace-deploy}/lock"
+if [ -e "$DEPLOY_LOCK" ]; then exec 8<"$DEPLOY_LOCK"; flock -n 8 || exit 0; exec 8<&-; fi
 
 # 계속 돌아야 하는 서비스(minio-init처럼 한 번 돌고 끝나는 것은 뺀다)
 # 조회 자체가 실패하면(도커 데몬 문제 등) 서비스 상태와 섞지 않고 상태 파일도 그대로 둔다
