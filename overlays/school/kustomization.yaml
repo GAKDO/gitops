@@ -45,7 +45,7 @@ images:
   newTag: 30f8c58dd8f7f581e8a7c3fb4a8404ea86bb6aa9
 - name: web
   newName: ghcr.io/gakdo/web
-  newTag: 04ef6e2bb0de7c45133f57aab0509d4791e335d1
+  newTag: d2b537b6d441eacf3e483afd9c2016f2971ddeb0
 # 비밀이 아닌 접속 주소. 이름을 고정해(해시 없음) Rancher·CronJob에서도 같은 이름으로 찾는다.
 # 대신 값을 바꿔도 파드가 저절로 다시 뜨지 않는다 (README "어디를 바꾸나")
 configMapGenerator:
