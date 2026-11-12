@@ -1,0 +1,91 @@
+# 바깥에서 본 운영 점검: GitHub 러너가 https://gakdo.site 를 직접 두드려 화면·서버 6개·챗봇이 응답하는지와
+# 인증서 남은 기간을 본다. 서버 안 health.sh(cron)는 서버·앞단 nginx·DNS·인증서가 죽으면 알릴 수 없어서 바깥에서 한 번 더 본다.
+name: 운영 점검
+
+# 언제 도나: 30분마다(기본 브랜치에서만 돈다) 또는 손으로. 읽기만 하고 서버에는 접속하지 않는다
+on:
+  schedule:
+    - cron: "7,37 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: site-check
+  cancel-in-progress: true
+
+env:
+  # 다른 주소를 보려면 레포 변수 SITE_URL
+  SITE_URL: ${{ vars.SITE_URL || 'https://gakdo.site' }}
+  CERT_MIN_DAYS: "14"
+
+jobs:
+  check:
+    name: 운영 점검
+    runs-on: ubuntu-latest
+    # 가장 나쁜 경우(8곳 모두 10초씩 세 번 + 사이 대기 10초 두 번 = 400초)에도 결과 표와 알림까지 가게 넉넉히 둔다
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: 화면·서버 응답과 인증서 확인
+        id: check
+        run: |
+          base="${SITE_URL%/}"; bad=""
+          {
+            echo "| 대상 | 결과 | 버전·시간 |"
+            echo "|---|---|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          # 한 번 실패는 배포로 다시 뜨는 중일 수 있어 10초 간격으로 세 번까지 본다
+          probe() {
+            local name="$1" path="$2" out code body t i
+            for i in 1 2 3; do
+              out=$(curl -sS -m 10 -o /tmp/body -w '%{http_code} %{time_total}' "$base$path" 2>/dev/null) || out="000 0"
+              code=${out%% *}; t=${out##* }
+              [ "$code" = 200 ] && break
+              [ "$i" = 3 ] || sleep 10
+            done
+            body=$(head -c 200 /tmp/body 2>/dev/null | tr -d '\n|' || true)
+            ver=$(grep -oE '[0-9a-f]{40}' <<<"$body" | head -n 1 || true)
+            if [ "$code" = 200 ]; then
+              echo "| $name | ✅ | ${ver::7} ${t}초 |" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "| $name | ❌ HTTP $code | |" >> "$GITHUB_STEP_SUMMARY"; bad="$bad $name($code)"
+            fi
+          }
+          probe web /version.txt
+          probe gateway /api/v1/gateway/ping
+          probe auth-server /api/v1/auth/ping
+          probe rental-server /api/v1/rentals/ping
+          probe capture-server /api/v1/captures/ping
+          probe diagnostics-server /api/v1/diagnostics/ping
+          probe report-server /api/v1/reports/ping
+          probe chat-server /api/v1/chat/ping
+          # 인증서 남은 날 (https일 때만)
+          case "$base" in https://*)
+            host=${base#https://}; host=${host%%/*}
+            end=$(echo | timeout 15 openssl s_client -servername "$host" -connect "$host:443" 2>/dev/null | openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2 || true)
+            if [ -n "$end" ]; then
+              days=$(( ($(date -d "$end" +%s) - $(date +%s)) / 86400 ))
+              if [ "$days" -lt "$CERT_MIN_DAYS" ]; then
+                echo "| 인증서 | ❌ ${days}일 남음 | |" >> "$GITHUB_STEP_SUMMARY"; bad="$bad 인증서(${days}일)"
+              else
+                echo "| 인증서 | ✅ | ${days}일 남음 |" >> "$GITHUB_STEP_SUMMARY"
+              fi
+            else
+              echo "| 인증서 | ❌ 읽지 못함 | |" >> "$GITHUB_STEP_SUMMARY"; bad="$bad 인증서(읽지 못함)"
+            fi ;;
+          esac
+          echo "bad=${bad# }" >> "$GITHUB_OUTPUT"
+          [ -z "$bad" ] || { echo "::error::응답하지 않는 대상:$bad"; exit 1; }
+      - name: 실패 알림
+        if: failure() && (vars.DISCORD_ENABLED == 'true' || vars.TELEGRAM_ENABLED == 'true')
+        uses: ./.github/actions/notify
+        with:
+          discord-webhook-url: ${{ vars.DISCORD_ENABLED == 'true' && secrets.DISCORD_WEBHOOK_URL || '' }}
+          telegram-bot-token: ${{ vars.TELEGRAM_ENABLED == 'true' && secrets.TELEGRAM_BOT_TOKEN || '' }}
+          telegram-chat-id: ${{ vars.TELEGRAM_ENABLED == 'true' && secrets.TELEGRAM_CHAT_ID || '' }}
+          title: "[운영 점검] ${{ env.SITE_URL }} 응답 없음"
+          description: "${{ steps.check.outputs.bad }}"
+          status: failure
+          url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
