@@ -40,8 +40,9 @@ fi
 case "$1" in
   inspect)
     f=$(file_of "$4"); s=$(name_of "$4")
+    [ -f "$f" ] || [ -f "$f.stopped" ] || exit 1
     case "$3" in
-      *State.Status*) echo "running 0" ;;
+      *State.Status*) if [ -f "$f" ]; then echo "running 0"; else echo "exited 0"; fi ;;
       *Created*) case "$4" in cid2-*) echo 2 ;; *) echo 1 ;; esac ;;
       *Config.Image*) echo "ghcr.io/gakdo/$(cat "$W/imgname.$s" 2>/dev/null || echo "$s"):$(cat "$W/tagname.$s" 2>/dev/null || echo develop)" ;;
       *NetworkSettings*) case "$4" in cid2-*) echo "10.0.0.2 " ;; *) echo "10.0.0.1 " ;; esac ;;
@@ -55,7 +56,7 @@ case "$1" in
     esac ;;
   tag) echo "$2" > "$W/tag.$(svc_of "$3")" ;;
   stop) echo "stop ${*: -1}" >> "$W/stops" ;;
-  rm) rm -f "$(file_of "${*: -1}")" ;;
+  rm) f=$(file_of "${*: -1}"); if [ -e "$W/rm-fail" ]; then mv "$f" "$f.stopped"; exit 1; fi; rm -f "$f" ;;
   logs) echo "(가짜 로그)" ;;
 esac
 FAKE
@@ -170,10 +171,17 @@ if run >/dev/null 2>&1; then fail "새 컨테이너 띄우기가 실패하면 0�
 [ "$(count auth-server)" = 1 ] && [ "$(cat "$T/w/run.auth-server")" = sha256:kkk2 ] && ok "새 컨테이너 띄우기가 실패하면 만들어진 것만 지우고 옛 것을 둔다" || fail "띄우기 실패 정리"
 rm "$T/w/scale-fail.auth-server"
 
+set_img remote.auth-server qqq7; touch "$T/w/rm-fail"; : > "$T/w/notified"
+run >/dev/null 2>&1
+rm "$T/w/rm-fail"
+[ "$(run_of auth-server)" = sha256:qqq7 ] && grep -q "지워지지 않았습니다" "$T/w/notified" && grep -q "배포 완료" "$T/w/notified" \
+  && ok "멈춘 옛 컨테이너가 지워지지 않으면 배포는 마치고 따로 알린다" || fail "삭제 실패"
+rm -f "$T/w"/*.stopped; [ -f "$T/w/run.auth-server" ] || mv "$T/w/run2.auth-server" "$T/w/run.auth-server"
+
 # 앞 실행이 새 컨테이너를 띄운 직후 죽은 경우: 확인되지 않은 새 것(응답 없음)이 남아 있다
 set_img remote.auth-server ppp6; set_img run2.auth-server ppp6; echo sha256:ppp6 > "$T/w/broken"
 if run >/dev/null 2>&1; then fail "확인되지 않은 새 컨테이너는 0이 아닌 값으로 끝나야 한다"; fi
-[ "$(count auth-server)" = 1 ] && [ "$(cat "$T/w/run.auth-server")" = sha256:kkk2 ] && ok "남아 있던 확인되지 않은 새 컨테이너 대신 요청을 받던 옛 것을 남긴다" || fail "미확인 컨테이너"
+[ "$(count auth-server)" = 1 ] && [ "$(cat "$T/w/run.auth-server")" = sha256:qqq7 ] && ok "남아 있던 확인되지 않은 새 컨테이너 대신 요청을 받던 옛 것을 남긴다" || fail "미확인 컨테이너"
 : > "$T/w/broken"
 echo latest > "$T/w/tagname.web"; set_img remote.web lll3; before=$(ups)
 if run >/dev/null 2>&1; then fail "태그가 다른 컨테이너는 0이 아닌 값으로 끝나야 한다"; fi

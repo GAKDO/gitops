@@ -177,9 +177,14 @@ roll() {
     docker stop -t "$STOP_WAIT" "$cid" >/dev/null 2>&1
     docker rm -f "$cid" >/dev/null 2>&1
   done
-  # 옛 컨테이너가 남아 있으면 입구 확인이 옛 것을 볼 수 있으므로 성공으로 치지 않는다
+  # 옛 컨테이너가 아직 돌고 있으면 입구 확인이 옛 것을 볼 수 있으므로 성공으로 치지 않는다.
+  # 멈췄지만 지워지지 않은 것은 요청을 받지 않으므로 배포는 계속하고, 손으로 지우도록 알린다
+  local st
   for cid in $old; do
-    if containers "$svc" | grep -qx "$cid"; then log "[$svc] 옛 컨테이너 ${cid::12}를 내리지 못함: $(docker inspect -f '{{.State.Status}}' "$cid" 2>/dev/null)"; return 2; fi
+    st=$(docker inspect -f '{{.State.Status}}' "$cid" 2>/dev/null) || continue   # 없으면 지워진 것
+    if [ "${st%% *}" = running ]; then log "[$svc] 옛 컨테이너 ${cid::12}를 내리지 못함(상태 $st)"; return 2; fi
+    log "[$svc] 멈춘 옛 컨테이너 ${cid::12}가 지워지지 않음(상태 $st)"
+    notify_or_queue "배포 주의: $svc 의 멈춘 옛 컨테이너 ${cid::12}가 지워지지 않았습니다 · 확인: docker rm ${cid::12}"
   done
   [ "$svc" = gateway ] && reload_web   # 없어진 옛 주소를 nginx가 잊게 한다
   wait_ready "$svc" "$want" || return 2
