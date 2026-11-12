@@ -87,6 +87,8 @@ container_ip() { docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddr
 # 새 컨테이너에 직접 묻는다(아직 옛 컨테이너도 떠 있어 입구로는 누가 답했는지 알 수 없다). 리눅스 호스트에서만 닿는다
 fetch_direct() { local ip; ip=$(container_ip "$1"); [ -n "$ip" ] && curl -fsS -m 5 "http://$ip:$APP_PORT$2" 2>/dev/null; }
 reload_web() { c exec -T web nginx -s reload >/dev/null 2>&1; }
+# gateway를 다시 만들면 주소가 바뀔 수 있어 web nginx에 알린다(reload가 실패해도 30초 뒤에는 nginx가 스스로 다시 찾는다)
+gateway_moved() { [ "$1" != gateway ] || reload_web || true; }
 # 무중단으로 바꿀 수 있는가: 목록에 있고, 서버라면 지금 도는 gateway가 교체를 견디는 이미지여야 한다
 can_roll() {
   local svc="$1" gw
@@ -95,13 +97,12 @@ can_roll() {
   gw=$(container gateway); [ -n "$gw" ] || return 1
   [ "$(docker inspect -f "{{index .Config.Labels \"$ROLL_LABEL\"}}" "$gw" 2>/dev/null)" = 1 ]
 }
-# 앞 실행이 중간에 죽어 컨테이너가 둘 남았으면 하나만 남긴다(태그 이미지로 도는 것 우선)
+# 앞 실행이 중간에 죽어 컨테이너가 둘 남았으면 가장 먼저 만든 것(요청을 받던 것)만 남긴다.
+# 나중 것은 준비 확인을 마쳤는지 알 수 없으므로 지우고, 이미지가 다르면 이어지는 배포가 확인부터 다시 한다
 keep_one() {
-  local svc="$1" want="$2" all keep="" cid
+  local svc="$1" all keep="" cid
   all=$(containers "$svc"); [ "$(wc -w <<<"$all")" -gt 1 ] || return 0
-  for cid in $all; do
-    [ "$(docker inspect -f '{{.Image}}' "$cid" 2>/dev/null)" = "$want" ] && { keep="$cid"; break; }
-  done
+  keep=$(for cid in $all; do echo "$(docker inspect -f '{{.Created}}' "$cid" 2>/dev/null) $cid"; done | sort | head -n 1 | awk '{print $NF}')
   [ -n "$keep" ] || keep=$(head -n 1 <<<"$all")
   for cid in $all; do
     [ "$cid" = "$keep" ] && continue
@@ -158,7 +159,11 @@ wait_ready() {
 roll() {
   local svc="$1" want="$2" old new="" cid
   old=$(containers "$svc")
-  c up -d --no-deps --no-recreate --scale "$svc=2" "$svc" >/dev/null 2>&1 || return 1
+  if ! c up -d --no-deps --no-recreate --scale "$svc=2" "$svc" >/dev/null 2>&1; then
+    # 실패해도 새 컨테이너가 만들어졌을 수 있다. 옛 것만 남긴다
+    for cid in $(containers "$svc"); do grep -qx "$cid" <<<"$old" || docker rm -f "$cid" >/dev/null 2>&1; done
+    return 1
+  fi
   for cid in $(containers "$svc"); do grep -qx "$cid" <<<"$old" || new="$cid"; done
   [ -n "$new" ] || { log "[$svc] 새 컨테이너가 만들어지지 않음"; return 1; }
   if ! wait_ready "$svc" "$want" "$new"; then
@@ -170,7 +175,11 @@ roll() {
   if [ "$svc" = gateway ]; then reload_web || sleep 31; else sleep "$SETTLE"; fi
   for cid in $old; do
     docker stop -t "$STOP_WAIT" "$cid" >/dev/null 2>&1
-    docker rm "$cid" >/dev/null 2>&1
+    docker rm -f "$cid" >/dev/null 2>&1
+  done
+  # 옛 컨테이너가 남아 있으면 입구 확인이 옛 것을 볼 수 있으므로 성공으로 치지 않는다
+  for cid in $old; do
+    if containers "$svc" | grep -qx "$cid"; then log "[$svc] 옛 컨테이너 ${cid::12}를 내리지 못함: $(docker inspect -f '{{.State.Status}}' "$cid" 2>/dev/null)"; return 2; fi
   done
   [ "$svc" = gateway ] && reload_web   # 없어진 옛 주소를 nginx가 잊게 한다
   wait_ready "$svc" "$want" || return 2
@@ -192,7 +201,7 @@ deploy_one() {
   c pull -q "$svc" >/dev/null 2>&1 || { log "[$svc] 이미지 받기 실패(다음 차례에 다시 시도)"; return 1; }
   cur=$(docker inspect -f '{{.Image}}' "$cid" 2>/dev/null); new=$(image_id "$ref")
   [ -n "$cur" ] && [ -n "$new" ] || { log "[$svc] 이미지 정보를 읽지 못해 건너뜀"; return 0; }
-  keep_one "$svc" "$new"; cid=$(container "$svc"); cur=$(docker inspect -f '{{.Image}}' "$cid" 2>/dev/null)
+  keep_one "$svc"; cid=$(container "$svc"); cur=$(docker inspect -f '{{.Image}}' "$cid" 2>/dev/null)
   [ "$cur" = "$new" ] && return 0
   if [ "$(cat "$STATE/$svc.bad" 2>/dev/null)" = "$new" ]; then return 0; fi   # 이미 실패한 이미지. 다음 이미지를 기다린다
 
@@ -211,7 +220,7 @@ deploy_one() {
     fi
   else
     log "[$svc] $(short "$cur") → $(short "$new") $mode 시작"
-    c up -d --no-deps "$svc" >/dev/null 2>&1 && wait_ready "$svc" "$new"; rc=$?
+    c up -d --no-deps "$svc" >/dev/null 2>&1 && gateway_moved "$svc" && wait_ready "$svc" "$new"; rc=$?
   fi
   if [ "$rc" = 0 ]; then
     took=$((SECONDS - start)); rm -f "$STATE/$svc.bad"
@@ -224,7 +233,7 @@ deploy_one() {
   # 되돌리기: 같은 태그를 직전 이미지로 다시 붙이고 그 이미지로 띄운다
   c logs --tail=30 "$svc" 2>&1 | sed "s/^/[$svc] /" || true
   echo "$new" > "$STATE/$svc.bad"
-  if docker tag "$cur" "$ref" && c up -d --no-deps "$svc" >/dev/null 2>&1 && wait_ready "$svc" "$cur"; then
+  if docker tag "$cur" "$ref" && c up -d --no-deps "$svc" >/dev/null 2>&1 && gateway_moved "$svc" && wait_ready "$svc" "$cur"; then
     log "[$svc] 새 버전이 응답하지 않아 직전 버전 $(short "$cur")로 되돌림"
     echo "$(now) $svc $(short "$cur") $(short "$new") rollback" >> "$STATE/history.log"
     notify_or_queue "배포 실패 → 되돌림: $svc $(short "$new")가 응답하지 않아 $(short "$cur")로 되돌렸습니다"
@@ -280,7 +289,9 @@ case "${1:-run}" in
     can_roll "$svc" || { echo "$svc 는 무중단으로 바꿀 수 없습니다(목록에 없거나, 지금 gateway 이미지가 교체를 견디지 못함)" >&2; exit 1; }
     exec 9>>"$STATE/lock"; flock -w 60 9 || { echo "다른 배포가 진행 중입니다" >&2; exit 1; }
     cid=$(container "$svc"); [ -n "$cid" ] || { echo "$svc 가 떠 있지 않습니다" >&2; exit 1; }
-    cur=$(docker inspect -f '{{.Image}}' "$cid"); keep_one "$svc" "$cur"
+    keep_one "$svc"; cid=$(container "$svc"); cur=$(docker inspect -f '{{.Image}}' "$cid"); ref=$(image_ref "$svc")
+    # 받아 두기만 한 새 이미지가 있으면 새 컨테이너가 그 이미지로 떠서 "같은 이미지로 교체"가 되지 않는다
+    [ -n "$ref" ] && [ "$(image_id "$ref")" = "$cur" ] || { echo "$svc 는 도는 이미지와 받아 둔 이미지가 다릅니다. 먼저 $0 을 한 번 돌려 배포를 끝내 주세요" >&2; exit 1; }
     log "[$svc] 같은 이미지 $(short "$cur")로 무중단 교체 시험"; start=$SECONDS
     roll "$svc" "$cur"; rc=$?
     log "[$svc] 끝(결과 $rc, $((SECONDS - start))초)"; exit "$rc" ;;

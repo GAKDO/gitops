@@ -27,7 +27,8 @@ if [ "$1" = compose ]; then
     pull) shift 2; for s in "$@"; do [ -e "$W/pull-fail.$s" ] && exit 1; [ -f "$W/remote.$s" ] && cp "$W/remote.$s" "$W/tag.$s"; done ;;
     up) s="${*: -1}"
       case "$*" in
-        *--scale*) if [ -f "$W/run.$s" ]; then cp "$W/tag.$s" "$W/run2.$s"; else cp "$W/tag.$s" "$W/run.$s"; fi
+        *--scale*) [ -e "$W/scale-fail.$s" ] && { cp "$W/tag.$s" "$W/run2.$s"; exit 1; }
+                   if [ -f "$W/run.$s" ]; then cp "$W/tag.$s" "$W/run2.$s"; else cp "$W/tag.$s" "$W/run.$s"; fi
                    echo "roll $s $(cat "$W/tag.$s")" >> "$W/ups" ;;
         *) rm -f "$W/run2.$s"; cp "$W/tag.$s" "$W/run.$s"; echo "up $s $(cat "$W/tag.$s")" >> "$W/ups" ;;
       esac ;;
@@ -41,6 +42,7 @@ case "$1" in
     f=$(file_of "$4"); s=$(name_of "$4")
     case "$3" in
       *State.Status*) echo "running 0" ;;
+      *Created*) case "$4" in cid2-*) echo 2 ;; *) echo 1 ;; esac ;;
       *Config.Image*) echo "ghcr.io/gakdo/$(cat "$W/imgname.$s" 2>/dev/null || echo "$s"):$(cat "$W/tagname.$s" 2>/dev/null || echo develop)" ;;
       *NetworkSettings*) case "$4" in cid2-*) echo "10.0.0.2 " ;; *) echo "10.0.0.1 " ;; esac ;;
       *Config.Labels*) cat "$W/gateway-label" 2>/dev/null ;;
@@ -155,6 +157,24 @@ before=$(ups); run roll auth-server >/dev/null
 [ "$(ups)" = $((before + 1)) ] && [ "$(count auth-server)" = 1 ] && [ "$(run_of auth-server)" = sha256:kkk2 ] && ok "roll은 같은 이미지로 무중단 교체를 한 번 한다" || fail "roll"
 if run roll web >/dev/null 2>&1; then fail "web은 무중단 교체 대상이 아니어야 한다"; else ok "web은 무중단 교체 대상이 아니다"; fi
 run probe auth-server 1 | grep -q "실패 0" && ok "probe가 성공·실패 수를 센다" || fail "probe"
+
+# 여기부터는 auth-server가 cid-(먼저 만든 것) 하나로 도는 상태에서 시작한다
+[ -f "$T/w/run.auth-server" ] || mv "$T/w/run2.auth-server" "$T/w/run.auth-server"
+set_img tag.auth-server mmm4; before=$(ups)
+if run roll auth-server >/dev/null 2>&1; then fail "받아 둔 이미지가 다르면 roll은 거부해야 한다"; fi
+[ "$(ups)" = "$before" ] && ok "받아 두기만 한 새 이미지가 있으면 roll을 거부한다" || fail "roll 거부"
+set_img tag.auth-server kkk2
+
+set_img remote.auth-server nnn5; touch "$T/w/scale-fail.auth-server"
+if run >/dev/null 2>&1; then fail "새 컨테이너 띄우기가 실패하면 0이 아닌 값으로 끝나야 한다"; fi
+[ "$(count auth-server)" = 1 ] && [ "$(cat "$T/w/run.auth-server")" = sha256:kkk2 ] && ok "새 컨테이너 띄우기가 실패하면 만들어진 것만 지우고 옛 것을 둔다" || fail "띄우기 실패 정리"
+rm "$T/w/scale-fail.auth-server"
+
+# 앞 실행이 새 컨테이너를 띄운 직후 죽은 경우: 확인되지 않은 새 것(응답 없음)이 남아 있다
+set_img remote.auth-server ppp6; set_img run2.auth-server ppp6; echo sha256:ppp6 > "$T/w/broken"
+if run >/dev/null 2>&1; then fail "확인되지 않은 새 컨테이너는 0이 아닌 값으로 끝나야 한다"; fi
+[ "$(count auth-server)" = 1 ] && [ "$(cat "$T/w/run.auth-server")" = sha256:kkk2 ] && ok "남아 있던 확인되지 않은 새 컨테이너 대신 요청을 받던 옛 것을 남긴다" || fail "미확인 컨테이너"
+: > "$T/w/broken"
 echo latest > "$T/w/tagname.web"; set_img remote.web lll3; before=$(ups)
 if run >/dev/null 2>&1; then fail "태그가 다른 컨테이너는 0이 아닌 값으로 끝나야 한다"; fi
 [ "$(ups)" = "$before" ] && ok "compose 설정과 다른 태그로 뜬 컨테이너는 건드리지 않고 알린다" || fail "태그 불일치"
