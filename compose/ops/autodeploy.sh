@@ -180,7 +180,8 @@ mkdir -p "$STATE" "$(dirname "$PAUSE")"
 cd "$COMPOSE" || exit 1
 case "${1:-run}" in
   pause)
-    shift; echo "$(now) ${*:-사유 없음}" > "$PAUSE"
+    # 표시를 먼저 써야 진행 중인 배포가 다음 서비스로 넘어가지 않는다
+    shift; echo "$(now) ${*:-사유 없음}" > "$PAUSE" || { echo "멈춤 표시를 쓰지 못했습니다: $PAUSE" >&2; exit 1; }
     # 이미 교체 중인 서비스가 있으면 끝날 때까지 기다렸다가 돌아온다(돌아온 뒤에는 아무것도 바뀌지 않는다)
     exec 9>>"$STATE/lock"
     flock -w 300 9 || { echo "진행 중인 배포가 5분 넘게 끝나지 않았습니다. 멈춤은 걸렸으니 $0 status로 확인하세요" >&2; exit 1; }
