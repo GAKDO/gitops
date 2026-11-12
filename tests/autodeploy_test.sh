@@ -224,6 +224,12 @@ run >/dev/null 2>&1 || true
 [ "$(cat "$T/w/run.web" 2>/dev/null)" = "$prev" ] && ok "실패한 컨테이너가 죽고 이미지를 받지 못해도 끝내지 못한 되돌리기를 다시 한다" || fail "죽은 뒤 되돌리기 재시도"
 rm "$T/w/pull-fail.web"; : > "$T/w/broken"
 
+# ── 되돌리기 표식의 태그가 지금 compose 설정과 다르면 다시 하지 않고 표식을 남긴다 ──
+echo "sha256:old1 ghcr.io/gakdo/web:latest" > "$T/home/.cache/trace-deploy/web.rollback"; before=$(ups)
+if run >/dev/null 2>&1; then fail "되돌리기 표식의 태그가 다르면 0이 아닌 값으로 끝나야 한다"; fi
+[ "$(ups)" = "$before" ] && [ -s "$T/home/.cache/trace-deploy/web.rollback" ] && ok "되돌리기 표식의 태그가 compose 설정과 다르면 건드리지 않고 표식을 남긴다" || fail "되돌리기 태그 불일치"
+rm "$T/home/.cache/trace-deploy/web.rollback"
+
 # ── 컨테이너 목록 조회가 실패하면 지우지 않는다 ──
 set_img remote.web vvv1; echo 3 > "$T/w/ps-fail.web"
 if out=$(run 2>&1); then fail "목록 조회가 실패하면 0이 아닌 값으로 끝나야 한다"; fi

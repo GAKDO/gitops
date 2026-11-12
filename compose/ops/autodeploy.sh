@@ -241,6 +241,9 @@ deploy_one() {
     [ -n "$cid" ] && cur=$(docker inspect -f '{{.Image}}' "$cid" 2>/dev/null)
     if [ "$cur" = "$prev" ]; then
       rm -f "$STATE/$svc.rollback"   # 사람이 이미 직전 버전으로 띄워 둠
+    elif ! { [ "${pref%:*}" = "$PREFIX$svc" ] && grep -qxF "$pref" <<<"$COMPOSE_IMAGES"; }; then
+      # 그사이 compose 설정의 태그가 바뀌었으면 적어 둔 태그에 직전 이미지를 붙여도 compose는 다른 이미지를 띄운다. 표식은 남긴다
+      log "[$svc] 끝내지 못한 되돌리기의 이미지($pref)가 지금 compose 설정과 달라 다시 하지 않음. 직접 확인 필요"; return 1
     elif docker image inspect "$prev" >/dev/null 2>&1; then
       log "[$svc] 끝내지 못한 되돌리기를 다시 시도"
       rollback "$svc" "$pref" "$prev" "${cur:-$prev}"; return 1
