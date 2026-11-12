@@ -8,6 +8,7 @@ main에 버전이 적힌 CHANGELOG가 올라가면 release.yml이 태그와 GitH
 
 ### 추가
 
+- 자동 배포의 무중단 교체: gateway·서버 6개·chat-server는 새 컨테이너를 먼저 띄워 준비된 뒤 옛 것을 내리고, 준비되지 않으면 새 것만 지움. `autodeploy.sh roll <서비스>`·`probe <서비스>`로 끊김을 잰다(web은 1~2초 끊김)
 - 학교 서버 자동 배포(`compose/ops/autodeploy.sh`): 새 이미지를 받아 바뀐 서비스만 교체하고, ping 응답의 커밋으로 새 버전을 확인한 뒤 실패하면 직전 이미지로 되돌리고 알림. 멈춤·다시 켜기·상태 명령과 가짜 docker 시험(`tests/autodeploy_test.sh`, 매니페스트 검증에서 실행)
 - 바깥 운영 점검 워크플로(`site-check.yml`): 30분마다 `https://gakdo.site`의 화면·서버 6개·챗봇 응답과 인증서 남은 기간을 확인하고 실패하면 알림
 - 로컬 Compose(G1, `compose/`): 서버 6개 + web + PostgreSQL·RabbitMQ·Redis·MinIO를 `docker compose up` 한 번으로 띄움. 입구는 web nginx 하나(`/api/` → gateway, `/trace-captures/`·`/trace-derived/` → MinIO), 공개 주소는 `.env`의 `PUBLIC_BASE_URL`, 이미지는 GHCR 태그(기본 `develop`). 매니페스트 검증에 `docker compose config` 확인을 더함

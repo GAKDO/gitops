@@ -8,10 +8,16 @@
 #   autodeploy.sh status     서비스별로 지금 도는 버전과 받아 둔 최신 버전
 #   autodeploy.sh pause      자동 배포 멈춤(촬영·시연 전에). 사유를 뒤에 적을 수 있다
 #   autodeploy.sh resume     다시 켬
+#   autodeploy.sh roll <서비스>          같은 이미지로 무중단 교체를 한 번 해 본다(시험용)
+#   autodeploy.sh probe <서비스> [초]    그 서비스의 ping을 0.2초마다 불러 성공·실패 수를 센다(교체 중 끊김 측정)
 #
 # 한 서비스마다: 그 서비스의 새 이미지 받기 → 지금 컨테이너와 이미지가 다르면 교체 → 최대 TRACE_DEPLOY_WAIT초 동안
 #   ① 컨테이너가 죽거나 다시 켜지지 않았는지 ② ping이 응답하는지 ③ 응답의 커밋이 새 이미지의 커밋인지 확인
 #   → 실패하면 직전 이미지로 되돌리고 그 이미지를 '실패'로 적어 다음 이미지가 올 때까지 다시 시도하지 않는다.
+# 무중단 교체(TRACE_DEPLOY_ROLLING의 서비스): 새 컨테이너를 옆에 하나 더 띄워 준비되면 옛 컨테이너를 내린다.
+#   준비되지 않으면 새 컨테이너만 지우므로 서비스는 끊기지 않는다. 부르는 쪽이 새 IP를 찾는 방법:
+#   gateway → web nginx를 reload, 서버들 → gateway가 이름을 5초만 기억하고 연결 실패를 다시 보냄(gateway 이미지 표시로 확인).
+#   web은 호스트 포트를 쥐고 있어 둘을 띄울 수 없으므로 예전처럼 다시 만든다(1~2초 끊김).
 # 바꾸는 것은 앱 이미지뿐이다. compose 파일·.env·DB·모델 파일은 건드리지 않는다.
 set -uo pipefail
 COMPOSE="${TRACE_COMPOSE_DIR:-$HOME/gitops/compose}"
@@ -22,6 +28,12 @@ WAIT="${TRACE_DEPLOY_WAIT:-180}"
 STEP="${TRACE_DEPLOY_STEP:-3}"
 # inspect-worker는 검사 도중에 다시 켜지지 않게 기본에서 뺐다. 넣으려면 이 변수에 더한다
 SERVICES="${TRACE_DEPLOY_SERVICES:-auth-server rental-server capture-server diagnostics-server report-server chat-server gateway web}"
+# 무중단으로 바꿀 서비스(호스트 포트를 쓰지 않는 것만). 비우면 모두 예전처럼 다시 만든다
+ROLLING="${TRACE_DEPLOY_ROLLING-gateway auth-server rental-server capture-server diagnostics-server report-server chat-server}"
+SETTLE="${TRACE_DEPLOY_SETTLE:-8}"          # gateway가 새 IP를 찾을 때까지(이름 기억 5초 + 여유)
+STOP_WAIT="${TRACE_DEPLOY_STOP_WAIT:-40}"   # 옛 컨테이너가 처리 중인 요청을 끝낼 시간(Spring graceful 30초 + 여유)
+APP_PORT="${TRACE_APP_PORT:-8080}"
+ROLL_LABEL="site.gakdo.trace.upstream-rolling"
 . "$(dirname "$0")/notify.sh"
 
 now() { date -u +%FT%TZ; }
@@ -70,6 +82,35 @@ short() {   # 사람이 읽을 짧은 이름: 커밋 7자, 없으면 이미지 I
   if [ -n "$commit" ]; then echo "${commit::7}"; else local id="${1#sha256:}"; echo "${id::12}"; fi
 }
 container() { c ps -q "$1" | head -n 1; }
+containers() { c ps -q "$1"; }
+container_ip() { docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' "$1" 2>/dev/null | awk '{print $1}'; }
+# 새 컨테이너에 직접 묻는다(아직 옛 컨테이너도 떠 있어 입구로는 누가 답했는지 알 수 없다). 리눅스 호스트에서만 닿는다
+fetch_direct() { local ip; ip=$(container_ip "$1"); [ -n "$ip" ] && curl -fsS -m 5 "http://$ip:$APP_PORT$2" 2>/dev/null; }
+reload_web() { c exec -T web nginx -s reload >/dev/null 2>&1; }
+# 무중단으로 바꿀 수 있는가: 목록에 있고, 서버라면 지금 도는 gateway가 교체를 견디는 이미지여야 한다
+can_roll() {
+  local svc="$1" gw
+  case " $ROLLING " in *" $svc "*) ;; *) return 1 ;; esac
+  [ "$svc" = gateway ] && return 0
+  gw=$(container gateway); [ -n "$gw" ] || return 1
+  [ "$(docker inspect -f "{{index .Config.Labels \"$ROLL_LABEL\"}}" "$gw" 2>/dev/null)" = 1 ]
+}
+# 앞 실행이 중간에 죽어 컨테이너가 둘 남았으면 하나만 남긴다(태그 이미지로 도는 것 우선)
+keep_one() {
+  local svc="$1" want="$2" all keep="" cid
+  all=$(containers "$svc"); [ "$(wc -w <<<"$all")" -gt 1 ] || return 0
+  for cid in $all; do
+    [ "$(docker inspect -f '{{.Image}}' "$cid" 2>/dev/null)" = "$want" ] && { keep="$cid"; break; }
+  done
+  [ -n "$keep" ] || keep=$(head -n 1 <<<"$all")
+  for cid in $all; do
+    [ "$cid" = "$keep" ] && continue
+    log "[$svc] 남아 있던 여분 컨테이너 ${cid::12} 정리"
+    docker rm -f "$cid" >/dev/null 2>&1
+  done
+  [ "$svc" = gateway ] && reload_web
+  return 0
+}
 # 알림을 보내지 못하면 남겨 두었다가 다음 실행 때 다시 보낸다(되돌림 알림이 웹훅 장애로 사라지지 않게)
 notify_or_queue() { trace_notify "$1" || echo "$1" >> "$STATE/pending-notify"; }
 flush_notify() {
@@ -81,12 +122,12 @@ flush_notify() {
   printf '%s' "$rest" > "$STATE/pending-notify"
 }
 
-# 새 컨테이너가 제대로 떴는지: $1 서비스, $2 기대하는 이미지 ID
+# 새 컨테이너가 제대로 떴는지: $1 서비스, $2 기대하는 이미지 ID, $3(있으면) 그 컨테이너에 직접 묻는다
 wait_ready() {
-  local svc="$1" want="$2" path commit start=$SECONDS cid st body
+  local svc="$1" want="$2" only="${3:-}" path commit start=$SECONDS cid st body
   path=$(ping_path "$svc"); commit=$(image_commit "$want")
   while :; do
-    cid=$(container "$svc")
+    cid="${only:-$(container "$svc")}"
     if [ -n "$cid" ]; then
       st=$(docker inspect -f '{{.State.Status}} {{.RestartCount}}' "$cid" 2>/dev/null)
       case "$st" in
@@ -95,7 +136,7 @@ wait_ready() {
             if [ -z "$path" ]; then
               # 확인 주소가 없는 서비스는 10초 동안 죽지 않으면 통과
               [ $((SECONDS - start)) -ge 10 ] && return 0
-            elif body=$(fetch "$path"); then
+            elif body=$(if [ -n "$only" ]; then fetch_direct "$cid" "$path"; else fetch "$path"; fi); then
               # web의 version.txt는 이미지에 커밋 환경 변수가 없어 응답 여부만 본다
               if [ -z "$commit" ] || grep -q "$commit" <<<"$body"; then return 0; fi
             fi
@@ -107,6 +148,29 @@ wait_ready() {
     [ $((SECONDS - start)) -ge "$WAIT" ] && { log "[$svc] ${WAIT}초 안에 준비되지 않음"; return 1; }
     sleep "$STEP"
   done
+}
+
+# 무중단 교체: $1 서비스, $2 띄울 이미지 ID(태그가 이미 그 이미지를 가리켜야 한다).
+# 0 성공, 1 새 컨테이너가 준비되지 않음(옛 컨테이너는 그대로라 끊기지 않았다), 2 옛 컨테이너를 내린 뒤 입구 확인 실패
+roll() {
+  local svc="$1" want="$2" old new="" cid
+  old=$(containers "$svc")
+  c up -d --no-deps --no-recreate --scale "$svc=2" "$svc" >/dev/null 2>&1 || return 1
+  for cid in $(containers "$svc"); do grep -qx "$cid" <<<"$old" || new="$cid"; done
+  [ -n "$new" ] || { log "[$svc] 새 컨테이너가 만들어지지 않음"; return 1; }
+  if ! wait_ready "$svc" "$want" "$new"; then
+    docker logs --tail=30 "$new" 2>&1 | sed "s/^/[$svc] /" || true
+    docker rm -f "$new" >/dev/null 2>&1
+    return 1
+  fi
+  # 부르는 쪽이 새 컨테이너를 알게 한 뒤에 옛 것을 내린다
+  if [ "$svc" = gateway ]; then reload_web || sleep 31; else sleep "$SETTLE"; fi
+  for cid in $old; do
+    docker stop -t "$STOP_WAIT" "$cid" >/dev/null 2>&1
+    docker rm "$cid" >/dev/null 2>&1
+  done
+  [ "$svc" = gateway ] && reload_web   # 없어진 옛 주소를 nginx가 잊게 한다
+  wait_ready "$svc" "$want" || return 2
 }
 
 deploy_one() {
@@ -122,16 +186,32 @@ deploy_one() {
   c pull -q "$svc" >/dev/null 2>&1 || { log "[$svc] 이미지 받기 실패(다음 차례에 다시 시도)"; return 1; }
   cur=$(docker inspect -f '{{.Image}}' "$cid" 2>/dev/null); new=$(image_id "$ref")
   [ -n "$cur" ] && [ -n "$new" ] || { log "[$svc] 이미지 정보를 읽지 못해 건너뜀"; return 0; }
+  keep_one "$svc" "$new"; cid=$(container "$svc"); cur=$(docker inspect -f '{{.Image}}' "$cid" 2>/dev/null)
   [ "$cur" = "$new" ] && return 0
   if [ "$(cat "$STATE/$svc.bad" 2>/dev/null)" = "$new" ]; then return 0; fi   # 이미 실패한 이미지. 다음 이미지를 기다린다
 
-  log "[$svc] $(short "$cur") → $(short "$new") 교체 시작"
-  local start=$SECONDS
-  if c up -d --no-deps "$svc" >/dev/null 2>&1 && wait_ready "$svc" "$new"; then
+  local start=$SECONDS mode="교체" rc
+  if can_roll "$svc"; then
+    mode="무중단 교체"
+    log "[$svc] $(short "$cur") → $(short "$new") $mode 시작"
+    roll "$svc" "$new"; rc=$?
+    if [ "$rc" = 1 ]; then
+      # 새 컨테이너만 지웠고 옛 컨테이너가 계속 받았다. 태그를 직전 이미지로 돌려 손으로 up 해도 실패한 이미지가 뜨지 않게 한다
+      echo "$new" > "$STATE/$svc.bad"; docker tag "$cur" "$ref"
+      log "[$svc] 새 버전이 준비되지 않아 바꾸지 않음(끊김 없음)"
+      echo "$(now) $svc $(short "$cur") $(short "$new") not-ready" >> "$STATE/history.log"
+      notify_or_queue "배포 실패(끊김 없음): $svc $(short "$new")가 준비되지 않아 $(short "$cur")를 그대로 둡니다"
+      return 1
+    fi
+  else
+    log "[$svc] $(short "$cur") → $(short "$new") $mode 시작"
+    c up -d --no-deps "$svc" >/dev/null 2>&1 && wait_ready "$svc" "$new"; rc=$?
+  fi
+  if [ "$rc" = 0 ]; then
     took=$((SECONDS - start)); rm -f "$STATE/$svc.bad"
-    log "[$svc] 배포 완료 (${took}초)"
-    echo "$(now) $svc $(short "$cur") $(short "$new") ok ${took}s" >> "$STATE/history.log"
-    notify_or_queue "배포 완료: $svc $(short "$cur") → $(short "$new") (${took}초)"
+    log "[$svc] 배포 완료 (${took}초, $mode)"
+    echo "$(now) $svc $(short "$cur") $(short "$new") ok ${took}s $mode" >> "$STATE/history.log"
+    notify_or_queue "배포 완료: $svc $(short "$cur") → $(short "$new") (${took}초, $mode)"
     return 0
   fi
 
@@ -187,9 +267,27 @@ case "${1:-run}" in
     flock -w 300 9 || { echo "진행 중인 배포가 5분 넘게 끝나지 않았습니다. 멈춤은 걸렸으니 $0 status로 확인하세요" >&2; exit 1; }
     echo "자동 배포를 멈췄습니다. 다시 켜기: $0 resume"; exit 0 ;;
   resume) rm -f "$PAUSE"; echo "자동 배포를 다시 켰습니다."; exit 0 ;;
+  roll)
+    svc="${2:?쓰는 법: $0 roll <서비스>}"
+    can_roll "$svc" || { echo "$svc 는 무중단으로 바꿀 수 없습니다(목록에 없거나, 지금 gateway 이미지가 교체를 견디지 못함)" >&2; exit 1; }
+    exec 9>>"$STATE/lock"; flock -w 60 9 || { echo "다른 배포가 진행 중입니다" >&2; exit 1; }
+    cid=$(container "$svc"); [ -n "$cid" ] || { echo "$svc 가 떠 있지 않습니다" >&2; exit 1; }
+    cur=$(docker inspect -f '{{.Image}}' "$cid"); keep_one "$svc" "$cur"
+    log "[$svc] 같은 이미지 $(short "$cur")로 무중단 교체 시험"; start=$SECONDS
+    roll "$svc" "$cur"; rc=$?
+    log "[$svc] 끝(결과 $rc, $((SECONDS - start))초)"; exit "$rc" ;;
+  probe)
+    svc="${2:?쓰는 법: $0 probe <서비스> [초]}"; secs="${3:-120}"; path=$(ping_path "$svc")
+    [ -n "$path" ] || { echo "$svc 는 확인 주소가 없습니다" >&2; exit 1; }
+    okc=0; bad=0; end=$((SECONDS + secs))
+    while [ "$SECONDS" -lt "$end" ]; do
+      if fetch "$path" >/dev/null; then okc=$((okc + 1)); else bad=$((bad + 1)); echo "$(now) 실패"; fi
+      sleep 0.2
+    done
+    echo "$svc ${secs}초: 성공 $okc, 실패 $bad"; [ "$bad" = 0 ]; exit $? ;;
   status) only_defined; status; exit 0 ;;
   run) ;;
-  *) echo "쓰는 법: $0 [run|status|pause [사유]|resume]" >&2; exit 2 ;;
+  *) echo "쓰는 법: $0 [run|status|pause [사유]|resume|roll <서비스>|probe <서비스> [초]]" >&2; exit 2 ;;
 esac
 
 [ -e "$PAUSE" ] && exit 0   # 멈춤 상태에서는 아무것도 하지 않는다(로그도 남기지 않는다)
