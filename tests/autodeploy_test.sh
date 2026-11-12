@@ -41,7 +41,7 @@ case "$1" in
     f=$(file_of "$4"); s=$(name_of "$4")
     case "$3" in
       *State.Status*) echo "running 0" ;;
-      *Config.Image*) echo "ghcr.io/gakdo/$s:$(cat "$W/tagname.$s" 2>/dev/null || echo develop)" ;;
+      *Config.Image*) echo "ghcr.io/gakdo/$(cat "$W/imgname.$s" 2>/dev/null || echo "$s"):$(cat "$W/tagname.$s" 2>/dev/null || echo develop)" ;;
       *NetworkSettings*) case "$4" in cid2-*) echo "10.0.0.2 " ;; *) echo "10.0.0.1 " ;; esac ;;
       *Config.Labels*) cat "$W/gateway-label" 2>/dev/null ;;
       *) cat "$f" ;;
@@ -158,4 +158,8 @@ run probe auth-server 1 | grep -q "실패 0" && ok "probe가 성공·실패 수�
 echo latest > "$T/w/tagname.web"; set_img remote.web lll3; before=$(ups)
 if run >/dev/null 2>&1; then fail "태그가 다른 컨테이너는 0이 아닌 값으로 끝나야 한다"; fi
 [ "$(ups)" = "$before" ] && ok "compose 설정과 다른 태그로 뜬 컨테이너는 건드리지 않고 알린다" || fail "태그 불일치"
+rm -f "$T/w/tagname.web"; echo gateway > "$T/w/imgname.web"; before=$(ups)
+if run >/dev/null 2>&1; then fail "다른 서비스의 이미지로 뜬 컨테이너는 0이 아닌 값으로 끝나야 한다"; fi
+[ "$(ups)" = "$before" ] && ok "다른 서비스의 이미지로 뜬 컨테이너는 목록에 있는 이미지여도 건드리지 않는다" || fail "다른 서비스 이미지"
+rm -f "$T/w/imgname.web"
 echo "모두 통과"

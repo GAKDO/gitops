@@ -186,7 +186,8 @@ deploy_one() {
   ref=$(image_ref "$svc")
   [ -n "$ref" ] || { log "[$svc] 앱 이미지($PREFIX)가 아니어서 건너뜀"; return 0; }
   # 손으로 다른 태그(예: AUTH_SERVER_TAG=latest)로 띄운 컨테이너면 compose가 받는 이미지와 달라 비교가 어긋난다. 건드리지 않고 알린다
-  grep -qxF "$ref" <<<"$COMPOSE_IMAGES" || { log "[$svc] 도는 이미지($ref)가 compose 설정과 달라 건너뜀. 같은 설정으로 다시 띄워 주세요"; return 1; }
+  # 이미지 이름은 서비스 이름과 같다(ghcr.io/gakdo/<서비스>:<태그>). 목록에 있더라도 다른 서비스의 이미지면 이 서비스 설정과 다른 것이다
+  { [ "${ref%:*}" = "$PREFIX$svc" ] && grep -qxF "$ref" <<<"$COMPOSE_IMAGES"; } || { log "[$svc] 도는 이미지($ref)가 compose 설정과 달라 건너뜀. 같은 설정으로 다시 띄워 주세요"; return 1; }
   # 이 서비스만 받는다. 받기가 실패해도 다른 서비스는 계속한다
   c pull -q "$svc" >/dev/null 2>&1 || { log "[$svc] 이미지 받기 실패(다음 차례에 다시 시도)"; return 1; }
   cur=$(docker inspect -f '{{.Image}}' "$cid" 2>/dev/null); new=$(image_id "$ref")
