@@ -19,7 +19,10 @@ if [ "$1" = compose ]; then
   shift
   case "$1" in
     config)
-      printf '%s\n' auth-server gateway web postgres ;;
+      case "$*" in
+        *--images*) printf '%s\n' ghcr.io/gakdo/auth-server:develop ghcr.io/gakdo/gateway:develop ghcr.io/gakdo/web:develop postgres:16 ;;
+        *) printf '%s\n' auth-server gateway web postgres ;;
+      esac ;;
     ps) [ -f "$W/run.$3" ] && echo "cid-$3"; [ -f "$W/run2.$3" ] && echo "cid2-$3" ;;
     pull) shift 2; for s in "$@"; do [ -e "$W/pull-fail.$s" ] && exit 1; [ -f "$W/remote.$s" ] && cp "$W/remote.$s" "$W/tag.$s"; done ;;
     up) s="${*: -1}"
@@ -38,7 +41,7 @@ case "$1" in
     f=$(file_of "$4"); s=$(name_of "$4")
     case "$3" in
       *State.Status*) echo "running 0" ;;
-      *Config.Image*) echo "ghcr.io/gakdo/$s:develop" ;;
+      *Config.Image*) echo "ghcr.io/gakdo/$s:$(cat "$W/tagname.$s" 2>/dev/null || echo develop)" ;;
       *NetworkSettings*) case "$4" in cid2-*) echo "10.0.0.2 " ;; *) echo "10.0.0.1 " ;; esac ;;
       *Config.Labels*) cat "$W/gateway-label" 2>/dev/null ;;
       *) cat "$f" ;;
@@ -152,4 +155,7 @@ before=$(ups); run roll auth-server >/dev/null
 [ "$(ups)" = $((before + 1)) ] && [ "$(count auth-server)" = 1 ] && [ "$(run_of auth-server)" = sha256:kkk2 ] && ok "roll은 같은 이미지로 무중단 교체를 한 번 한다" || fail "roll"
 if run roll web >/dev/null 2>&1; then fail "web은 무중단 교체 대상이 아니어야 한다"; else ok "web은 무중단 교체 대상이 아니다"; fi
 run probe auth-server 1 | grep -q "실패 0" && ok "probe가 성공·실패 수를 센다" || fail "probe"
+echo latest > "$T/w/tagname.web"; set_img remote.web lll3; before=$(ups)
+if run >/dev/null 2>&1; then fail "태그가 다른 컨테이너는 0이 아닌 값으로 끝나야 한다"; fi
+[ "$(ups)" = "$before" ] && ok "compose 설정과 다른 태그로 뜬 컨테이너는 건드리지 않고 알린다" || fail "태그 불일치"
 echo "모두 통과"

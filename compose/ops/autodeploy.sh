@@ -115,8 +115,11 @@ keep_one() {
 notify_or_queue() { trace_notify "$1" || echo "$1" >> "$STATE/pending-notify"; }
 flush_notify() {
   [ -s "$STATE/pending-notify" ] || return 0
-  local line rest=""
+  local line rest="" tries=0
   while IFS= read -r line; do
+    # 웹훅이 응답하지 않으면 건마다 10초씩 걸리므로 한 번에 5건까지만 다시 보낸다(배포가 밀리지 않게)
+    if [ "$tries" -ge 5 ]; then rest="$rest$line"$'\n'; continue; fi
+    tries=$((tries + 1))
     trace_notify "$line" || rest="$rest$line"$'\n'
   done < "$STATE/pending-notify"
   printf '%s' "$rest" > "$STATE/pending-notify"
@@ -182,6 +185,8 @@ deploy_one() {
   [ -n "$cid" ] || { log "[$svc] 떠 있지 않아 건너뜀"; return 0; }
   ref=$(image_ref "$svc")
   [ -n "$ref" ] || { log "[$svc] 앱 이미지($PREFIX)가 아니어서 건너뜀"; return 0; }
+  # 손으로 다른 태그(예: AUTH_SERVER_TAG=latest)로 띄운 컨테이너면 compose가 받는 이미지와 달라 비교가 어긋난다. 건드리지 않고 알린다
+  grep -qxF "$ref" <<<"$COMPOSE_IMAGES" || { log "[$svc] 도는 이미지($ref)가 compose 설정과 달라 건너뜀. 같은 설정으로 다시 띄워 주세요"; return 1; }
   # 이 서비스만 받는다. 받기가 실패해도 다른 서비스는 계속한다
   c pull -q "$svc" >/dev/null 2>&1 || { log "[$svc] 이미지 받기 실패(다음 차례에 다시 시도)"; return 1; }
   cur=$(docker inspect -f '{{.Image}}' "$cid" 2>/dev/null); new=$(image_id "$ref")
@@ -266,7 +271,9 @@ case "${1:-run}" in
     exec 9>>"$STATE/lock"
     flock -w 300 9 || { echo "진행 중인 배포가 5분 넘게 끝나지 않았습니다. 멈춤은 걸렸으니 $0 status로 확인하세요" >&2; exit 1; }
     echo "자동 배포를 멈췄습니다. 다시 켜기: $0 resume"; exit 0 ;;
-  resume) rm -f "$PAUSE"; echo "자동 배포를 다시 켰습니다."; exit 0 ;;
+  resume)
+    rm -f "$PAUSE" || { echo "멈춤 표시를 지우지 못했습니다: $PAUSE" >&2; exit 1; }
+    echo "자동 배포를 다시 켰습니다."; exit 0 ;;
   roll)
     svc="${2:?쓰는 법: $0 roll <서비스>}"
     can_roll "$svc" || { echo "$svc 는 무중단으로 바꿀 수 없습니다(목록에 없거나, 지금 gateway 이미지가 교체를 견디지 못함)" >&2; exit 1; }
@@ -296,6 +303,7 @@ exec 9>>"$STATE/lock"
 flock -w 60 9 || exit 0
 [ -e "$PAUSE" ] && exit 0   # 기다리는 사이에 멈춤이 걸렸을 수 있다
 only_defined
+COMPOSE_IMAGES="$(c config --images)" || { log "compose 이미지 목록 조회 실패"; exit 1; }
 flush_notify
 
 rc=0
