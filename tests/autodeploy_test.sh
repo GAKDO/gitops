@@ -23,7 +23,10 @@ if [ "$1" = compose ]; then
         *--images*) printf '%s\n' ghcr.io/gakdo/auth-server:develop ghcr.io/gakdo/gateway:develop ghcr.io/gakdo/web:develop postgres:16 ;;
         *) printf '%s\n' auth-server gateway web postgres ;;
       esac ;;
-    ps) [ -f "$W/run.$3" ] && echo "cid-$3"; [ -f "$W/run2.$3" ] && echo "cid2-$3"
+    ps) if [ "$2" = -q ] && [ -f "$W/ps-fail.$3" ]; then   # 남은 횟수가 0이 되는 조회만 실패한다
+          n=$(cat "$W/ps-fail.$3"); n=$((n - 1)); echo "$n" > "$W/ps-fail.$3"; [ "$n" = 0 ] && exit 1
+        fi
+        [ -f "$W/run.$3" ] && echo "cid-$3"; [ -f "$W/run2.$3" ] && echo "cid2-$3"
         case "$2" in *a*) [ -f "$W/run.$3.stopped" ] && echo "cid-$3"; [ -f "$W/run2.$3.stopped" ] && echo "cid2-$3" ;; esac ;;
     pull) shift 2; for s in "$@"; do [ -e "$W/pull-fail.$s" ] && exit 1; [ -f "$W/remote.$s" ] && cp "$W/remote.$s" "$W/tag.$s"; done ;;
     up) s="${*: -1}"
@@ -211,4 +214,19 @@ rm "$T/w/up-fail.web"; run >/dev/null 2>&1 || true
 [ "$(cat "$T/w/run.web")" = "$prev" ] && ok "끝내지 못한 되돌리기는 다음 실행에서 다시 한다" || fail "되돌리기 재시도"
 before=$(ups); run >/dev/null 2>&1 || true
 [ "$(ups)" = "$before" ] && ok "되돌린 뒤에는 실패한 이미지를 다시 띄우지 않는다" || fail "되돌린 뒤 재시도"
+
+# ── 되돌리기 실패 뒤 컨테이너가 죽었거나 이미지를 받지 못해도 다시 시도 ──
+set_img remote.web uuu1; echo sha256:uuu1 > "$T/w/broken"; echo "$prev" > "$T/w/up-fail.web"
+run >/dev/null 2>&1 || true
+[ -s "$T/home/.cache/trace-deploy/web.rollback" ] || fail "되돌리기 표식 준비"
+rm "$T/w/up-fail.web"; rm "$T/w/run.web"; touch "$T/w/pull-fail.web"
+run >/dev/null 2>&1 || true
+[ "$(cat "$T/w/run.web" 2>/dev/null)" = "$prev" ] && ok "실패한 컨테이너가 죽고 이미지를 받지 못해도 끝내지 못한 되돌리기를 다시 한다" || fail "죽은 뒤 되돌리기 재시도"
+rm "$T/w/pull-fail.web"; : > "$T/w/broken"
+
+# ── 컨테이너 목록 조회가 실패하면 지우지 않는다 ──
+set_img remote.web vvv1; echo 3 > "$T/w/ps-fail.web"
+if out=$(run 2>&1); then fail "목록 조회가 실패하면 0이 아닌 값으로 끝나야 한다"; fi
+grep -q "목록을 읽지 못해" <<<"$out" && [ -f "$T/w/run.web" ] && ok "컨테이너 목록을 읽지 못하면 도는 컨테이너를 지우지 않는다" || fail "목록 조회 실패 때 삭제"
+rm -f "$T/w/ps-fail.web"
 echo "모두 통과"

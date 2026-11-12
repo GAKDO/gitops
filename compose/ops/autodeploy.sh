@@ -102,9 +102,10 @@ can_roll() {
 # 멈춘 채 남은 컨테이너도 지운다(남아 있으면 --scale 2가 새로 만들지 않고 그것을 다시 켠다).
 # 지우지 못하면 실패를 돌려줘 이 서비스를 건너뛰고 다음 실행에서 다시 한다(새 이미지를 실패로 적지 않게)
 keep_one() {
-  local svc="$1" all keep="" cid failed=""
-  all=$(containers "$svc")
-  for cid in $(c ps -aq "$svc"); do
+  local svc="$1" all every keep="" cid failed=""
+  # 목록을 읽지 못하면 아무것도 지우지 않는다(빈 목록으로 보면 도는 컨테이너까지 멈춘 것으로 알고 지운다)
+  all=$(containers "$svc") && every=$(c ps -aq "$svc") || { log "[$svc] 컨테이너 목록을 읽지 못해 정리하지 않음"; return 1; }
+  for cid in $every; do
     grep -qx "$cid" <<<"$all" && continue
     log "[$svc] 멈춘 채 남은 컨테이너 ${cid::12} 정리"
     docker rm -f "$cid" >/dev/null 2>&1 || { log "[$svc] 멈춘 컨테이너 ${cid::12}를 지우지 못함"; failed=1; }
@@ -204,7 +205,8 @@ roll() {
 }
 
 # 되돌리기: 같은 태그를 직전 이미지로 다시 붙이고 그 이미지로 띄운다.
-# 실패하면 직전 이미지를 적어 두어 다음 실행이 다시 시도한다(알림은 처음 한 번만)
+# 실패하면 직전 이미지와 태그를 적어 두어 다음 실행이 다시 시도한다(알림은 처음 한 번만).
+# 표식을 알림보다 먼저 적는다(알림 도중에 죽어도 다음 실행이 되돌리기를 이어 가게)
 rollback() {
   local svc="$1" ref="$2" prev="$3" bad="$4"
   if docker tag "$prev" "$ref" && c up -d --no-deps "$svc" >/dev/null 2>&1 && gateway_moved "$svc" && wait_ready "$svc" "$prev"; then
@@ -215,11 +217,13 @@ rollback() {
     return 0
   fi
   log "[$svc] 되돌리기도 실패. 직접 확인 필요"
-  if [ ! -e "$STATE/$svc.rollback" ]; then
+  local first=1
+  [ -e "$STATE/$svc.rollback" ] && first=0
+  echo "$prev $ref" > "$STATE/$svc.rollback" || log "[$svc] 되돌리기 표식을 적지 못함"
+  if [ "$first" = 1 ]; then
     echo "$(now) $svc $(short "$prev") $(short "$bad") rollback-failed" >> "$STATE/history.log"
     notify_or_queue "배포 실패, 되돌리기도 실패: $svc · 확인: cd $COMPOSE && docker compose ps && docker compose logs --tail=50 $svc"
   fi
-  echo "$prev" > "$STATE/$svc.rollback"
   return 1
 }
 
@@ -227,6 +231,26 @@ deploy_one() {
   local svc="$1" ref cid cur new took
   # 도는 중에 멈춤(pause)이 걸렸으면 남은 서비스는 바꾸지 않는다
   [ -e "$PAUSE" ] && return 0
+  # 지난번에 되돌리기를 끝내지 못했으면 다른 검사·이미지 받기보다 먼저 다시 되돌린다.
+  # 실패한 컨테이너가 그사이 죽었거나 레지스트리에 닿지 않아도, 직전 이미지는 이 서버에 남아 있다
+  local prev="" pref=""
+  [ -s "$STATE/$svc.rollback" ] && read -r prev pref < "$STATE/$svc.rollback"
+  if [ -n "$prev" ] && [ -n "$pref" ]; then
+    keep_one "$svc" || return 1
+    cid=$(container "$svc"); cur=""
+    [ -n "$cid" ] && cur=$(docker inspect -f '{{.Image}}' "$cid" 2>/dev/null)
+    if [ "$cur" = "$prev" ]; then
+      rm -f "$STATE/$svc.rollback"   # 사람이 이미 직전 버전으로 띄워 둠
+    elif docker image inspect "$prev" >/dev/null 2>&1; then
+      log "[$svc] 끝내지 못한 되돌리기를 다시 시도"
+      rollback "$svc" "$pref" "$prev" "${cur:-$prev}"; return 1
+    else
+      log "[$svc] 직전 이미지가 이 서버에 없어 되돌리기를 그만둠. 직접 확인 필요"
+      rm -f "$STATE/$svc.rollback"
+    fi
+  else
+    rm -f "$STATE/$svc.rollback"
+  fi
   cid=$(container "$svc")
   # 떠 있지 않은 서비스는 사람이 일부러 멈춘 것으로 보고 건드리지 않는다
   [ -n "$cid" ] || { log "[$svc] 떠 있지 않아 건너뜀"; return 0; }
@@ -241,15 +265,6 @@ deploy_one() {
   [ -n "$cur" ] && [ -n "$new" ] || { log "[$svc] 이미지 정보를 읽지 못해 건너뜀"; return 0; }
   keep_one "$svc" || return 1
   cid=$(container "$svc"); cur=$(docker inspect -f '{{.Image}}' "$cid" 2>/dev/null)
-  # 지난번에 되돌리기를 끝내지 못했으면(실패한 이미지가 그대로 돌고 있음) 배포보다 먼저 다시 되돌린다
-  local prev; prev=$(cat "$STATE/$svc.rollback" 2>/dev/null)
-  if [ -n "$prev" ]; then
-    if [ "$cur" != "$prev" ] && docker image inspect "$prev" >/dev/null 2>&1; then
-      log "[$svc] 끝내지 못한 되돌리기를 다시 시도"
-      rollback "$svc" "$ref" "$prev" "$cur"; return 1
-    fi
-    rm -f "$STATE/$svc.rollback"
-  fi
   [ "$cur" = "$new" ] && return 0
   if [ "$(cat "$STATE/$svc.bad" 2>/dev/null)" = "$new" ]; then return 0; fi   # 이미 실패한 이미지. 다음 이미지를 기다린다
 
