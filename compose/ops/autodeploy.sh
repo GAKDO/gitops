@@ -239,8 +239,8 @@ deploy_one() {
     keep_one "$svc" || return 1
     cid=$(container "$svc"); cur=""
     [ -n "$cid" ] && cur=$(docker inspect -f '{{.Image}}' "$cid" 2>/dev/null)
-    if [ "$cur" = "$prev" ]; then
-      rm -f "$STATE/$svc.rollback"   # 사람이 이미 직전 버전으로 띄워 둠
+    if [ "$cur" = "$prev" ] && wait_ready "$svc" "$prev"; then
+      rm -f "$STATE/$svc.rollback"   # 직전 버전이 떠서 응답함(사람이 띄웠거나 늦게 준비됨). 떠 있어도 응답하지 않으면 아래에서 다시 되돌린다
     elif ! { [ "${pref%:*}" = "$PREFIX$svc" ] && grep -qxF "$pref" <<<"$COMPOSE_IMAGES"; }; then
       # 그사이 compose 설정의 태그가 바뀌었으면 적어 둔 태그에 직전 이미지를 붙여도 compose는 다른 이미지를 띄운다. 표식은 남긴다
       log "[$svc] 끝내지 못한 되돌리기의 이미지($pref)가 지금 compose 설정과 달라 다시 하지 않음. 직접 확인 필요"; return 1

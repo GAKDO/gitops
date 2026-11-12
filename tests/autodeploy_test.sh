@@ -230,6 +230,13 @@ if run >/dev/null 2>&1; then fail "되돌리기 표식의 태그가 다르면 0�
 [ "$(ups)" = "$before" ] && [ -s "$T/home/.cache/trace-deploy/web.rollback" ] && ok "되돌리기 표식의 태그가 compose 설정과 다르면 건드리지 않고 표식을 남긴다" || fail "되돌리기 태그 불일치"
 rm "$T/home/.cache/trace-deploy/web.rollback"
 
+# ── 직전 버전이 떠 있어도 응답하지 않으면 되돌리기 표식을 지우지 않는다 ──
+cur=$(cat "$T/w/run.web"); echo "$cur ghcr.io/gakdo/web:develop" > "$T/home/.cache/trace-deploy/web.rollback"; echo "$cur" > "$T/w/broken"
+if run >/dev/null 2>&1; then fail "직전 버전이 응답하지 않으면 0이 아닌 값으로 끝나야 한다"; fi
+[ -s "$T/home/.cache/trace-deploy/web.rollback" ] && ok "직전 버전이 떠 있어도 응답하지 않으면 되돌리기 표식을 남긴다" || fail "응답 없는 직전 버전"
+: > "$T/w/broken"; run >/dev/null 2>&1 || true
+[ ! -e "$T/home/.cache/trace-deploy/web.rollback" ] && ok "직전 버전이 응답하면 되돌리기 표식을 지운다" || fail "표식 정리"
+
 # ── 컨테이너 목록 조회가 실패하면 지우지 않는다 ──
 set_img remote.web vvv1; echo 3 > "$T/w/ps-fail.web"
 if out=$(run 2>&1); then fail "목록 조회가 실패하면 0이 아닌 값으로 끝나야 한다"; fi
