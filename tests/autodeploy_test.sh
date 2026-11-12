@@ -56,6 +56,8 @@ case "$1" in
       *) cat "$f" ;;
     esac ;;
   image)
+    # 이미지 ID만 넘긴 조회(되돌리기 전 확인)는 w/image-fail이 있으면 그 내용을 오류로 내고 실패한다
+    if [ "$3" != -f ] && [ -e "$W/image-fail" ]; then cat "$W/image-fail" >&2; exit 1; fi
     case "$4" in
       *.Id*) cat "$W/tag.$(svc_of "$5")" ;;
       *) id="$5"; case "$id" in ghcr.io/*) id=$(cat "$W/tag.$(svc_of "$id")") ;; esac; echo "APP_COMMIT=${id#sha256:}0000000" ;;
@@ -236,6 +238,14 @@ if run >/dev/null 2>&1; then fail "직전 버전이 응답하지 않으면 0이 
 [ -s "$T/home/.cache/trace-deploy/web.rollback" ] && ok "직전 버전이 떠 있어도 응답하지 않으면 되돌리기 표식을 남긴다" || fail "응답 없는 직전 버전"
 : > "$T/w/broken"; run >/dev/null 2>&1 || true
 [ ! -e "$T/home/.cache/trace-deploy/web.rollback" ] && ok "직전 버전이 응답하면 되돌리기 표식을 지운다" || fail "표식 정리"
+
+# ── 직전 이미지 확인이 잠깐 실패하면 표식을 남기고, 이미지가 정말 없을 때만 그만둔다 ──
+echo "sha256:old1 ghcr.io/gakdo/web:develop" > "$T/home/.cache/trace-deploy/web.rollback"; echo "Cannot connect to the Docker daemon" > "$T/w/image-fail"
+if run >/dev/null 2>&1; then fail "직전 이미지를 확인하지 못하면 0이 아닌 값으로 끝나야 한다"; fi
+[ -s "$T/home/.cache/trace-deploy/web.rollback" ] && ok "직전 이미지 확인이 실패하면 되돌리기 표식을 남긴다" || fail "이미지 확인 실패"
+echo "Error response from daemon: No such image: sha256:old1" > "$T/w/image-fail"; run >/dev/null 2>&1 || true
+[ ! -e "$T/home/.cache/trace-deploy/web.rollback" ] && ok "직전 이미지가 정말 없으면 되돌리기를 그만둔다" || fail "없는 이미지"
+rm "$T/w/image-fail"
 
 # ── 컨테이너 목록 조회가 실패하면 지우지 않는다 ──
 set_img remote.web vvv1; echo 3 > "$T/w/ps-fail.web"

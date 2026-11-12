@@ -233,7 +233,7 @@ deploy_one() {
   [ -e "$PAUSE" ] && return 0
   # 지난번에 되돌리기를 끝내지 못했으면 다른 검사·이미지 받기보다 먼저 다시 되돌린다.
   # 실패한 컨테이너가 그사이 죽었거나 레지스트리에 닿지 않아도, 직전 이미지는 이 서버에 남아 있다
-  local prev="" pref=""
+  local prev="" pref="" err
   [ -s "$STATE/$svc.rollback" ] && read -r prev pref < "$STATE/$svc.rollback"
   if [ -n "$prev" ] && [ -n "$pref" ]; then
     keep_one "$svc" || return 1
@@ -244,12 +244,15 @@ deploy_one() {
     elif ! { [ "${pref%:*}" = "$PREFIX$svc" ] && grep -qxF "$pref" <<<"$COMPOSE_IMAGES"; }; then
       # 그사이 compose 설정의 태그가 바뀌었으면 적어 둔 태그에 직전 이미지를 붙여도 compose는 다른 이미지를 띄운다. 표식은 남긴다
       log "[$svc] 끝내지 못한 되돌리기의 이미지($pref)가 지금 compose 설정과 달라 다시 하지 않음. 직접 확인 필요"; return 1
-    elif docker image inspect "$prev" >/dev/null 2>&1; then
+    elif err=$(docker image inspect "$prev" 2>&1 >/dev/null); then
       log "[$svc] 끝내지 못한 되돌리기를 다시 시도"
       rollback "$svc" "$pref" "$prev" "${cur:-$prev}"; return 1
     else
-      log "[$svc] 직전 이미지가 이 서버에 없어 되돌리기를 그만둠. 직접 확인 필요"
-      rm -f "$STATE/$svc.rollback"
+      # 이미지가 정말 없을 때만 그만둔다(표식을 계속 두면 이 서비스의 배포가 영영 막힌다). 그 밖의 오류는 다음 실행에서 다시 본다
+      case "$err" in
+        *"No such image"*) log "[$svc] 직전 이미지가 이 서버에 없어 되돌리기를 그만둠. 직접 확인 필요"; rm -f "$STATE/$svc.rollback" ;;
+        *) log "[$svc] 직전 이미지를 확인하지 못함(다음 차례에 다시 시도)"; return 1 ;;
+      esac
     fi
   else
     rm -f "$STATE/$svc.rollback"
