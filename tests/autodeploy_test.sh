@@ -18,7 +18,7 @@ if [ "$1" = compose ]; then
     config)
       printf '%s\n' auth-server web postgres ;;
     ps) [ -f "$W/run.$3" ] && echo "cid-$3" ;;
-    pull) shift 2; for s in "$@"; do [ -f "$W/remote.$s" ] && cp "$W/remote.$s" "$W/tag.$s"; done ;;
+    pull) shift 2; for s in "$@"; do [ -e "$W/pull-fail.$s" ] && exit 1; [ -f "$W/remote.$s" ] && cp "$W/remote.$s" "$W/tag.$s"; done ;;
     up) s="${*: -1}"; cp "$W/tag.$s" "$W/run.$s"; echo "up $s $(cat "$W/tag.$s")" >> "$W/ups" ;;
     logs) echo "(가짜 로그)" ;;
   esac
@@ -85,6 +85,10 @@ run pause "금요일 촬영" >/dev/null; set_img remote.web eee5; before=$(ups);
 [ "$(ups)" = "$before" ] && ok "멈춤 상태에서는 배포하지 않는다" || fail "멈춤"
 run resume >/dev/null; run >/dev/null
 [ "$(cat "$T/w/run.web")" = sha256:eee5 ] && ok "다시 켜면 밀린 이미지를 배포한다" || fail "다시 켜기"
+set_img remote.auth-server fff6; set_img remote.web fff6; touch "$T/w/pull-fail.auth-server"
+if run >/dev/null 2>&1; then fail "받기에 실패하면 0이 아닌 값으로 끝나야 한다"; fi
+[ "$(cat "$T/w/run.auth-server")" = sha256:ddd4 ] && [ "$(cat "$T/w/run.web")" = sha256:fff6 ] && ok "한 서비스의 받기가 실패해도 나머지는 배포한다" || fail "받기 실패"
+rm "$T/w/pull-fail.auth-server"; run >/dev/null
 out=$(run status)
-grep -q "web  *eee5000  *eee5000  *최신" <<<"$out" && ! grep -q chat-server <<<"$out" && ok "status가 서비스별 버전을 보여 준다" || fail "status"
+grep -q "web  *fff6000  *fff6000  *최신" <<<"$out" && ! grep -q chat-server <<<"$out" && ok "status가 서비스별 버전을 보여 준다" || fail "status"
 echo "모두 통과"
