@@ -23,14 +23,16 @@ if [ "$1" = compose ]; then
         *--images*) printf '%s\n' ghcr.io/gakdo/auth-server:develop ghcr.io/gakdo/gateway:develop ghcr.io/gakdo/web:develop postgres:16 ;;
         *) printf '%s\n' auth-server gateway web postgres ;;
       esac ;;
-    ps) [ -f "$W/run.$3" ] && echo "cid-$3"; [ -f "$W/run2.$3" ] && echo "cid2-$3" ;;
+    ps) [ -f "$W/run.$3" ] && echo "cid-$3"; [ -f "$W/run2.$3" ] && echo "cid2-$3"
+        case "$2" in *a*) [ -f "$W/run.$3.stopped" ] && echo "cid-$3"; [ -f "$W/run2.$3.stopped" ] && echo "cid2-$3" ;; esac ;;
     pull) shift 2; for s in "$@"; do [ -e "$W/pull-fail.$s" ] && exit 1; [ -f "$W/remote.$s" ] && cp "$W/remote.$s" "$W/tag.$s"; done ;;
     up) s="${*: -1}"
       case "$*" in
         *--scale*) [ -e "$W/scale-fail.$s" ] && { cp "$W/tag.$s" "$W/run2.$s"; exit 1; }
                    if [ -f "$W/run.$s" ]; then cp "$W/tag.$s" "$W/run2.$s"; else cp "$W/tag.$s" "$W/run.$s"; fi
                    echo "roll $s $(cat "$W/tag.$s")" >> "$W/ups" ;;
-        *) rm -f "$W/run2.$s"; cp "$W/tag.$s" "$W/run.$s"; echo "up $s $(cat "$W/tag.$s")" >> "$W/ups" ;;
+        *) [ "$(cat "$W/up-fail.$s" 2>/dev/null)" = "$(cat "$W/tag.$s")" ] && exit 1
+           rm -f "$W/run2.$s"; cp "$W/tag.$s" "$W/run.$s"; echo "up $s $(cat "$W/tag.$s")" >> "$W/ups" ;;
       esac ;;
     exec) echo "$*" >> "$W/reloads" ;;
     logs) echo "(가짜 로그)" ;;
@@ -57,7 +59,7 @@ case "$1" in
     esac ;;
   tag) echo "$2" > "$W/tag.$(svc_of "$3")" ;;
   stop) echo "stop ${*: -1}" >> "$W/stops" ;;
-  rm) f=$(file_of "${*: -1}"); if [ -e "$W/rm-fail" ]; then mv "$f" "$f.stopped"; exit 1; fi; rm -f "$f" ;;
+  rm) f=$(file_of "${*: -1}"); if [ -e "$W/rm-fail" ]; then [ -f "$f" ] && mv "$f" "$f.stopped"; exit 1; fi; rm -f "$f" "$f.stopped" ;;
   logs) echo "(가짜 로그)" ;;
 esac
 FAKE
@@ -177,7 +179,10 @@ run >/dev/null 2>&1
 rm "$T/w/rm-fail"
 [ "$(run_of auth-server)" = sha256:qqq7 ] && grep -q "지워지지 않았습니다" "$T/w/notified" && grep -q "배포 완료" "$T/w/notified" \
   && ok "멈춘 옛 컨테이너가 지워지지 않으면 배포는 마치고 따로 알린다" || fail "삭제 실패"
-rm -f "$T/w"/*.stopped; [ -f "$T/w/run.auth-server" ] || mv "$T/w/run2.auth-server" "$T/w/run.auth-server"
+set_img remote.auth-server sss9; before=$(ups); run >/dev/null 2>&1
+[ -z "$(ls "$T/w" | grep stopped)" ] && [ "$(count auth-server)" = 1 ] && [ "$(run_of auth-server)" = sha256:sss9 ] && [ "$(ups)" = $((before + 1)) ] \
+  && ok "멈춘 채 남은 옛 컨테이너는 다음 교체 전에 지운다" || fail "멈춘 컨테이너 정리"
+[ -f "$T/w/run.auth-server" ] || mv "$T/w/run2.auth-server" "$T/w/run.auth-server"
 
 set_img remote.auth-server rrr8; set_img run2.auth-server rrr8; touch "$T/w/created-fail"
 if run >/dev/null 2>&1; then fail "만든 시각을 읽지 못하면 0이 아닌 값으로 끝나야 한다"; fi
@@ -187,7 +192,7 @@ rm "$T/w/created-fail" "$T/w/run2.auth-server"
 # 앞 실행이 새 컨테이너를 띄운 직후 죽은 경우: 확인되지 않은 새 것(응답 없음)이 남아 있다
 set_img remote.auth-server ppp6; set_img run2.auth-server ppp6; echo sha256:ppp6 > "$T/w/broken"
 if run >/dev/null 2>&1; then fail "확인되지 않은 새 컨테이너는 0이 아닌 값으로 끝나야 한다"; fi
-[ "$(count auth-server)" = 1 ] && [ "$(cat "$T/w/run.auth-server")" = sha256:qqq7 ] && ok "남아 있던 확인되지 않은 새 컨테이너 대신 요청을 받던 옛 것을 남긴다" || fail "미확인 컨테이너"
+[ "$(count auth-server)" = 1 ] && [ "$(cat "$T/w/run.auth-server")" = sha256:sss9 ] && ok "남아 있던 확인되지 않은 새 컨테이너 대신 요청을 받던 옛 것을 남긴다" || fail "미확인 컨테이너"
 : > "$T/w/broken"
 echo latest > "$T/w/tagname.web"; set_img remote.web lll3; before=$(ups)
 if run >/dev/null 2>&1; then fail "태그가 다른 컨테이너는 0이 아닌 값으로 끝나야 한다"; fi
@@ -196,4 +201,14 @@ rm -f "$T/w/tagname.web"; echo gateway > "$T/w/imgname.web"; before=$(ups)
 if run >/dev/null 2>&1; then fail "다른 서비스의 이미지로 뜬 컨테이너는 0이 아닌 값으로 끝나야 한다"; fi
 [ "$(ups)" = "$before" ] && ok "다른 서비스의 이미지로 뜬 컨테이너는 목록에 있는 이미지여도 건드리지 않는다" || fail "다른 서비스 이미지"
 rm -f "$T/w/imgname.web"
+
+# ── 되돌리기 실패 뒤 다시 시도 ──
+: > "$T/w/broken"; run >/dev/null 2>&1 || true
+prev=$(cat "$T/w/run.web"); set_img remote.web ttt1; echo sha256:ttt1 > "$T/w/broken"; echo "$prev" > "$T/w/up-fail.web"
+if run >/dev/null 2>&1; then fail "되돌리기까지 실패하면 0이 아닌 값으로 끝나야 한다"; fi
+[ "$(cat "$T/w/run.web")" = sha256:ttt1 ] && grep -q "rollback-failed" "$T/home/.cache/trace-deploy/history.log" || fail "되돌리기 실패 준비"
+rm "$T/w/up-fail.web"; run >/dev/null 2>&1 || true
+[ "$(cat "$T/w/run.web")" = "$prev" ] && ok "끝내지 못한 되돌리기는 다음 실행에서 다시 한다" || fail "되돌리기 재시도"
+before=$(ups); run >/dev/null 2>&1 || true
+[ "$(ups)" = "$before" ] && ok "되돌린 뒤에는 실패한 이미지를 다시 띄우지 않는다" || fail "되돌린 뒤 재시도"
 echo "모두 통과"

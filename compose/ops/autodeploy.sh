@@ -99,9 +99,17 @@ can_roll() {
 }
 # 앞 실행이 중간에 죽어 컨테이너가 둘 남았으면 가장 먼저 만든 것(요청을 받던 것)만 남긴다.
 # 나중 것은 준비 확인을 마쳤는지 알 수 없으므로 지우고, 이미지가 다르면 이어지는 배포가 확인부터 다시 한다
+# 멈춘 채 남은 컨테이너도 지운다(남아 있으면 --scale 2가 새로 만들지 않고 그것을 다시 켠다).
+# 지우지 못하면 실패를 돌려줘 이 서비스를 건너뛰고 다음 실행에서 다시 한다(새 이미지를 실패로 적지 않게)
 keep_one() {
-  local svc="$1" all keep="" cid
-  all=$(containers "$svc"); [ "$(wc -w <<<"$all")" -gt 1 ] || return 0
+  local svc="$1" all keep="" cid failed=""
+  all=$(containers "$svc")
+  for cid in $(c ps -aq "$svc"); do
+    grep -qx "$cid" <<<"$all" && continue
+    log "[$svc] 멈춘 채 남은 컨테이너 ${cid::12} 정리"
+    docker rm -f "$cid" >/dev/null 2>&1 || { log "[$svc] 멈춘 컨테이너 ${cid::12}를 지우지 못함"; failed=1; }
+  done
+  [ "$(wc -w <<<"$all")" -gt 1 ] || { [ -z "$failed" ]; return; }
   local made rows=""
   for cid in $all; do
     # 만든 시각을 읽지 못하면 어느 것이 요청을 받던 것인지 알 수 없다. 아무것도 지우지 않고 이 서비스는 건너뛴다
@@ -112,10 +120,10 @@ keep_one() {
   for cid in $all; do
     [ "$cid" = "$keep" ] && continue
     log "[$svc] 남아 있던 여분 컨테이너 ${cid::12} 정리"
-    docker rm -f "$cid" >/dev/null 2>&1
+    docker rm -f "$cid" >/dev/null 2>&1 || { log "[$svc] 여분 컨테이너 ${cid::12}를 지우지 못함"; failed=1; }
   done
   [ "$svc" = gateway ] && reload_web
-  return 0
+  [ -z "$failed" ]
 }
 # 알림을 보내지 못하면 남겨 두었다가 다음 실행 때 다시 보낸다(되돌림 알림이 웹훅 장애로 사라지지 않게)
 notify_or_queue() { trace_notify "$1" || echo "$1" >> "$STATE/pending-notify"; }
@@ -195,6 +203,26 @@ roll() {
   wait_ready "$svc" "$want" || return 2
 }
 
+# 되돌리기: 같은 태그를 직전 이미지로 다시 붙이고 그 이미지로 띄운다.
+# 실패하면 직전 이미지를 적어 두어 다음 실행이 다시 시도한다(알림은 처음 한 번만)
+rollback() {
+  local svc="$1" ref="$2" prev="$3" bad="$4"
+  if docker tag "$prev" "$ref" && c up -d --no-deps "$svc" >/dev/null 2>&1 && gateway_moved "$svc" && wait_ready "$svc" "$prev"; then
+    rm -f "$STATE/$svc.rollback"
+    log "[$svc] 새 버전이 응답하지 않아 직전 버전 $(short "$prev")로 되돌림"
+    echo "$(now) $svc $(short "$prev") $(short "$bad") rollback" >> "$STATE/history.log"
+    notify_or_queue "배포 실패 → 되돌림: $svc $(short "$bad")가 응답하지 않아 $(short "$prev")로 되돌렸습니다"
+    return 0
+  fi
+  log "[$svc] 되돌리기도 실패. 직접 확인 필요"
+  if [ ! -e "$STATE/$svc.rollback" ]; then
+    echo "$(now) $svc $(short "$prev") $(short "$bad") rollback-failed" >> "$STATE/history.log"
+    notify_or_queue "배포 실패, 되돌리기도 실패: $svc · 확인: cd $COMPOSE && docker compose ps && docker compose logs --tail=50 $svc"
+  fi
+  echo "$prev" > "$STATE/$svc.rollback"
+  return 1
+}
+
 deploy_one() {
   local svc="$1" ref cid cur new took
   # 도는 중에 멈춤(pause)이 걸렸으면 남은 서비스는 바꾸지 않는다
@@ -213,6 +241,15 @@ deploy_one() {
   [ -n "$cur" ] && [ -n "$new" ] || { log "[$svc] 이미지 정보를 읽지 못해 건너뜀"; return 0; }
   keep_one "$svc" || return 1
   cid=$(container "$svc"); cur=$(docker inspect -f '{{.Image}}' "$cid" 2>/dev/null)
+  # 지난번에 되돌리기를 끝내지 못했으면(실패한 이미지가 그대로 돌고 있음) 배포보다 먼저 다시 되돌린다
+  local prev; prev=$(cat "$STATE/$svc.rollback" 2>/dev/null)
+  if [ -n "$prev" ]; then
+    if [ "$cur" != "$prev" ] && docker image inspect "$prev" >/dev/null 2>&1; then
+      log "[$svc] 끝내지 못한 되돌리기를 다시 시도"
+      rollback "$svc" "$ref" "$prev" "$cur"; return 1
+    fi
+    rm -f "$STATE/$svc.rollback"
+  fi
   [ "$cur" = "$new" ] && return 0
   if [ "$(cat "$STATE/$svc.bad" 2>/dev/null)" = "$new" ]; then return 0; fi   # 이미 실패한 이미지. 다음 이미지를 기다린다
 
@@ -241,18 +278,9 @@ deploy_one() {
     return 0
   fi
 
-  # 되돌리기: 같은 태그를 직전 이미지로 다시 붙이고 그 이미지로 띄운다
   c logs --tail=30 "$svc" 2>&1 | sed "s/^/[$svc] /" || true
   echo "$new" > "$STATE/$svc.bad"
-  if docker tag "$cur" "$ref" && c up -d --no-deps "$svc" >/dev/null 2>&1 && gateway_moved "$svc" && wait_ready "$svc" "$cur"; then
-    log "[$svc] 새 버전이 응답하지 않아 직전 버전 $(short "$cur")로 되돌림"
-    echo "$(now) $svc $(short "$cur") $(short "$new") rollback" >> "$STATE/history.log"
-    notify_or_queue "배포 실패 → 되돌림: $svc $(short "$new")가 응답하지 않아 $(short "$cur")로 되돌렸습니다"
-  else
-    log "[$svc] 되돌리기도 실패. 직접 확인 필요"
-    echo "$(now) $svc $(short "$cur") $(short "$new") rollback-failed" >> "$STATE/history.log"
-    notify_or_queue "배포 실패, 되돌리기도 실패: $svc · 확인: cd $COMPOSE && docker compose ps && docker compose logs --tail=50 $svc"
-  fi
+  rollback "$svc" "$ref" "$cur" "$new"
   return 1
 }
 
@@ -299,6 +327,8 @@ case "${1:-run}" in
     svc="${2:?쓰는 법: $0 roll <서비스>}"
     can_roll "$svc" || { echo "$svc 는 무중단으로 바꿀 수 없습니다(목록에 없거나, 지금 gateway 이미지가 교체를 견디지 못함)" >&2; exit 1; }
     exec 9>>"$STATE/lock"; flock -w 60 9 || { echo "다른 배포가 진행 중입니다" >&2; exit 1; }
+    # 기다리는 사이에 gateway가 바뀌었을 수 있다
+    can_roll "$svc" || { echo "$svc 는 지금 무중단으로 바꿀 수 없습니다(기다리는 사이 gateway 이미지가 바뀜)" >&2; exit 1; }
     cid=$(container "$svc"); [ -n "$cid" ] || { echo "$svc 가 떠 있지 않습니다" >&2; exit 1; }
     keep_one "$svc" || exit 1
     cid=$(container "$svc"); cur=$(docker inspect -f '{{.Image}}' "$cid"); ref=$(image_ref "$svc")
