@@ -43,7 +43,8 @@ case "$1" in
     [ -f "$f" ] || [ -f "$f.stopped" ] || exit 1
     case "$3" in
       *State.Status*) if [ -f "$f" ]; then echo "running 0"; else echo "exited 0"; fi ;;
-      *Created*) case "$4" in cid2-*) echo 2 ;; *) echo 1 ;; esac ;;
+      *Created*) [ -e "$W/created-fail" ] && exit 1
+                 case "$4" in cid2-*) echo 2 ;; *) echo 1 ;; esac ;;
       *Config.Image*) echo "ghcr.io/gakdo/$(cat "$W/imgname.$s" 2>/dev/null || echo "$s"):$(cat "$W/tagname.$s" 2>/dev/null || echo develop)" ;;
       *NetworkSettings*) case "$4" in cid2-*) echo "10.0.0.2 " ;; *) echo "10.0.0.1 " ;; esac ;;
       *Config.Labels*) cat "$W/gateway-label" 2>/dev/null ;;
@@ -177,6 +178,11 @@ rm "$T/w/rm-fail"
 [ "$(run_of auth-server)" = sha256:qqq7 ] && grep -q "지워지지 않았습니다" "$T/w/notified" && grep -q "배포 완료" "$T/w/notified" \
   && ok "멈춘 옛 컨테이너가 지워지지 않으면 배포는 마치고 따로 알린다" || fail "삭제 실패"
 rm -f "$T/w"/*.stopped; [ -f "$T/w/run.auth-server" ] || mv "$T/w/run2.auth-server" "$T/w/run.auth-server"
+
+set_img remote.auth-server rrr8; set_img run2.auth-server rrr8; touch "$T/w/created-fail"
+if run >/dev/null 2>&1; then fail "만든 시각을 읽지 못하면 0이 아닌 값으로 끝나야 한다"; fi
+[ "$(count auth-server)" = 2 ] && ok "컨테이너가 둘인데 만든 시각을 읽지 못하면 아무것도 지우지 않는다" || fail "만든 시각 실패"
+rm "$T/w/created-fail" "$T/w/run2.auth-server"
 
 # 앞 실행이 새 컨테이너를 띄운 직후 죽은 경우: 확인되지 않은 새 것(응답 없음)이 남아 있다
 set_img remote.auth-server ppp6; set_img run2.auth-server ppp6; echo sha256:ppp6 > "$T/w/broken"

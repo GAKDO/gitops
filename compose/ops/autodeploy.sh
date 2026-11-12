@@ -102,8 +102,13 @@ can_roll() {
 keep_one() {
   local svc="$1" all keep="" cid
   all=$(containers "$svc"); [ "$(wc -w <<<"$all")" -gt 1 ] || return 0
-  keep=$(for cid in $all; do echo "$(docker inspect -f '{{.Created}}' "$cid" 2>/dev/null) $cid"; done | sort | head -n 1 | awk '{print $NF}')
-  [ -n "$keep" ] || keep=$(head -n 1 <<<"$all")
+  local made rows=""
+  for cid in $all; do
+    # 만든 시각을 읽지 못하면 어느 것이 요청을 받던 것인지 알 수 없다. 아무것도 지우지 않고 이 서비스는 건너뛴다
+    made=$(docker inspect -f '{{.Created}}' "$cid" 2>/dev/null) && [ -n "$made" ] || { log "[$svc] 컨테이너가 둘인데 만든 시각을 읽지 못해 정리하지 않음. 직접 확인 필요"; return 1; }
+    rows="$rows$made $cid"$'\n'
+  done
+  keep=$(sort <<<"$rows" | sed '/^$/d' | head -n 1 | awk '{print $NF}')
   for cid in $all; do
     [ "$cid" = "$keep" ] && continue
     log "[$svc] 남아 있던 여분 컨테이너 ${cid::12} 정리"
@@ -206,7 +211,8 @@ deploy_one() {
   c pull -q "$svc" >/dev/null 2>&1 || { log "[$svc] 이미지 받기 실패(다음 차례에 다시 시도)"; return 1; }
   cur=$(docker inspect -f '{{.Image}}' "$cid" 2>/dev/null); new=$(image_id "$ref")
   [ -n "$cur" ] && [ -n "$new" ] || { log "[$svc] 이미지 정보를 읽지 못해 건너뜀"; return 0; }
-  keep_one "$svc"; cid=$(container "$svc"); cur=$(docker inspect -f '{{.Image}}' "$cid" 2>/dev/null)
+  keep_one "$svc" || return 1
+  cid=$(container "$svc"); cur=$(docker inspect -f '{{.Image}}' "$cid" 2>/dev/null)
   [ "$cur" = "$new" ] && return 0
   if [ "$(cat "$STATE/$svc.bad" 2>/dev/null)" = "$new" ]; then return 0; fi   # 이미 실패한 이미지. 다음 이미지를 기다린다
 
@@ -294,7 +300,8 @@ case "${1:-run}" in
     can_roll "$svc" || { echo "$svc 는 무중단으로 바꿀 수 없습니다(목록에 없거나, 지금 gateway 이미지가 교체를 견디지 못함)" >&2; exit 1; }
     exec 9>>"$STATE/lock"; flock -w 60 9 || { echo "다른 배포가 진행 중입니다" >&2; exit 1; }
     cid=$(container "$svc"); [ -n "$cid" ] || { echo "$svc 가 떠 있지 않습니다" >&2; exit 1; }
-    keep_one "$svc"; cid=$(container "$svc"); cur=$(docker inspect -f '{{.Image}}' "$cid"); ref=$(image_ref "$svc")
+    keep_one "$svc" || exit 1
+    cid=$(container "$svc"); cur=$(docker inspect -f '{{.Image}}' "$cid"); ref=$(image_ref "$svc")
     # 받아 두기만 한 새 이미지가 있으면 새 컨테이너가 그 이미지로 떠서 "같은 이미지로 교체"가 되지 않는다
     [ -n "$ref" ] && [ "$(image_id "$ref")" = "$cur" ] || { echo "$svc 는 도는 이미지와 받아 둔 이미지가 다릅니다. 먼저 $0 을 한 번 돌려 배포를 끝내 주세요" >&2; exit 1; }
     log "[$svc] 같은 이미지 $(short "$cur")로 무중단 교체 시험"; start=$SECONDS
